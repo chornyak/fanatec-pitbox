@@ -130,6 +130,8 @@ class State:
         self.loaded: str | None = data.get("loaded")
         self.last_slot: int | None = data.get("last_slot")  # to ask the base for its data after a reboot
         self.last_advanced: bool = data.get("last_advanced", True)
+        self.onboarded: bool = data.get("onboarded", False)  # first-run baseline offer was shown
+        self.models: dict[str, str] = data.get("models", {})  # USB product id (hex) -> chosen model key
 
     def save(self):
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -137,7 +139,9 @@ class State:
                 "seen": {str(k): v for k, v in self.seen.items()},
                 "loaded": self.loaded,
                 "last_slot": self.last_slot,
-                "last_advanced": self.last_advanced}
+                "last_advanced": self.last_advanced,
+                "onboarded": self.onboarded,
+                "models": self.models}
         tmp = STATE_FILE.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, indent=2) + "\n")
         tmp.replace(STATE_FILE)

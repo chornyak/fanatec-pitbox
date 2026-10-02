@@ -6,18 +6,48 @@ step (e.g. FOR 105 -> 100), so the UI snaps to the same steps and never sends va
 
 from dataclasses import dataclass, field
 
-# Product id -> (series, model) shown in the header.
-PRODUCTS = {
-    0x0020: ("CSL DD / DD PRO / CLUBSPORT DD", "DD WHEEL BASE"),
-    0x0E03: ("CSL ELITE", "WHEEL BASE"),
-    0x0005: ("CSL ELITE", "WHEEL BASE PS4"),
-    0x0001: ("CLUBSPORT", "WHEEL BASE V2"),
-    0x0004: ("CLUBSPORT", "WHEEL BASE V2.5"),
-    0x0006: ("PODIUM", "WHEEL BASE DD1"),
-    0x0007: ("PODIUM", "WHEEL BASE DD2"),
-    0x0011: ("CSR ELITE", "WHEEL BASE"),
-    0x0197: ("PORSCHE 911", "WHEEL BASE"),
+@dataclass(frozen=True)
+class Model:
+    """A wheel base model. Several models can share one USB product id, so the user picks theirs once."""
+    key: str
+    series: str       # small line in the header, as in Fanatec's app ("CSL")
+    name: str         # large line ("DD WHEEL BASE")
+    label: str        # in lists ("CSL DD with Boost Kit (8 Nm)")
+    torque: int | None = None  # peak torque in Nm, where it matters for recommendations
+    boost: bool = False
+
+
+# USB product id -> models using it (the driver README lists 0020 as CSL DD / DD Pro / ClubSport DD).
+MODELS = {
+    0x0020: (Model("csl-dd", "CSL", "DD WHEEL BASE", "CSL DD (5 Nm)", 5),
+             Model("csl-dd-boost", "CSL", "DD WHEEL BASE", "CSL DD with Boost Kit (8 Nm)", 8, boost=True),
+             Model("gt-dd-pro", "GT", "DD PRO WHEEL BASE", "GT DD Pro (5 Nm)", 5),
+             Model("gt-dd-pro-boost", "GT", "DD PRO WHEEL BASE", "GT DD Pro with Boost Kit (8 Nm)", 8, boost=True),
+             Model("clubsport-dd", "CLUBSPORT", "DD WHEEL BASE", "ClubSport DD (12 Nm)", 12)),
+    0x0E03: (Model("csl-elite", "CSL ELITE", "WHEEL BASE", "CSL Elite (original)"),
+             Model("csl-elite-v11", "CSL ELITE", "WHEEL BASE V1.1 / +", "CSL Elite V1.1 / CSL Elite+")),
+    0x0005: (Model("csl-elite-ps4", "CSL ELITE", "WHEEL BASE PS4", "CSL Elite PS4"),),
+    0x0001: (Model("clubsport-v2", "CLUBSPORT", "WHEEL BASE V2", "ClubSport V2"),),
+    0x0004: (Model("clubsport-v25", "CLUBSPORT", "WHEEL BASE V2.5", "ClubSport V2.5"),),
+    0x0006: (Model("podium-dd1", "PODIUM", "WHEEL BASE DD1", "Podium DD1", 20),),
+    0x0007: (Model("podium-dd2", "PODIUM", "WHEEL BASE DD2", "Podium DD2", 25),),
+    0x0011: (Model("csr-elite", "CSR ELITE", "WHEEL BASE", "CSR Elite"),),
+    0x0197: (Model("porsche-911", "PORSCHE 911", "WHEEL BASE", "Porsche 911 Turbo S / GT3 RS"),),
 }
+
+
+def models_for(product: int) -> tuple:
+    return MODELS.get(product, (Model(f"usb-{product:04x}", "FANATEC", f"WHEEL BASE {product:04X}",
+                                      f"Fanatec wheel base {product:04X}"),))
+
+
+def find_model(product: int, key: str | None) -> Model | None:
+    """The model the user chose, or the only model for this id; None if they still have to choose."""
+    models = models_for(product)
+    if len(models) == 1:
+        return models[0]
+    return next((m for m in models if m.key == key), None)
+
 
 # Driver's max_range per product; the max value means AUTO (see hid-ftec.c).
 _SEN_MAX = {0x0001: 900, 0x0004: 900, 0x0011: 900, 0x0197: 900,

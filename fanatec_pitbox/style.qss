@@ -259,8 +259,19 @@ QPushButton#small {
     padding: 7px 4px;
     font-weight: 500;
 }
-QMessageBox, QInputDialog {
+QDialog, QMessageBox, QInputDialog {
     background: #17181b;
+}
+QCheckBox::indicator {
+    width: 14px;
+    height: 14px;
+    border: 1px solid #9a9a9a;
+    background: transparent;
+}
+QCheckBox::indicator:checked {
+    border: 2px solid #f2e600;
+    background: qradialgradient(cx:0.5, cy:0.5, radius:0.6, fx:0.5, fy:0.5,
+                                stop:0 #f2e600, stop:0.55 #f2e600, stop:0.6 transparent);
 }
 QLineEdit {
     background: #111214;
@@ -346,4 +357,13 @@ QLabel#gear {
     font-size: 40pt;
     font-weight: 800;
     color: #f2e600;
+}
+
+QLabel#boostTag {
+    background: #2bb8aa;
+    color: #0c0d0e;
+    font-weight: 800;
+    font-style: italic;
+    font-size: 10pt;
+    padding: 2px 8px;
 }

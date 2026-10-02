@@ -9,16 +9,18 @@ from importlib import resources
 
 from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices, QIcon
-from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QCheckBox, QFrame, QGridLayout, QHBoxLayout,
+from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QCheckBox, QDialog, QFrame, QGridLayout, QHBoxLayout,
                                QInputDialog, QLabel, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
                                QPushButton, QScrollArea, QStackedWidget, QVBoxLayout, QWidget)
 
 from . import __version__
 from . import profiles as store
 from .device import UeventWatcher, WheelBase, find_wheel_bases, open_tuning_link
-from .params import PRODUCTS, STANDARD_KEYS, params_for
+from .params import STANDARD_KEYS, find_model, models_for, params_for
 from .input_view import InputPage
 from .inputs import InputReader, find_event_device
+from .baseline_ui import BaselinePicker, FirstRunDialog, ModelCombo
+from .baselines import available as baselines_available
 from .widgets import ParamControl, SlotCard
 
 WRITE_GAP_MS = 30        # gap between individual value writes
@@ -63,6 +65,8 @@ class MainWindow(QMainWindow):
         self.draft: dict[str, int] = {}  # edits not yet written to the base
         self.busy: str | None = None     # label of a running multi-step operation
         self._asked_base = False         # asked the base to report its settings (once per connection)
+        self._first_run_pending = False
+        self._slot_titles_key = None
         self._op = None
         self.state = store.State()
         self.profiles: list[store.Profile] = []
@@ -97,8 +101,15 @@ class MainWindow(QMainWindow):
         names.setSpacing(0)
         self.series_lbl = QLabel(objectName="series")
         self.model_lbl = QLabel("NO WHEEL BASE", objectName="model")
+        self.boost_tag = QLabel("BOOST KIT", objectName="boostTag")
+        self.boost_tag.hide()
+        model_row = QHBoxLayout()
+        model_row.setSpacing(12)
+        model_row.addWidget(self.model_lbl)
+        model_row.addWidget(self.boost_tag, 0, Qt.AlignVCenter)
+        model_row.addStretch(1)
         names.addWidget(self.series_lbl)
-        names.addWidget(self.model_lbl)
+        names.addLayout(model_row)
         top.addLayout(names)
         top.addStretch(1)
         self.loaded_lbl = QLabel(objectName="activeProfile")
@@ -247,13 +258,52 @@ class MainWindow(QMainWindow):
         return frame, grid
 
     def _build_settings_page(self):
-        page = QWidget()
+        scroll = QScrollArea(widgetResizable=True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        page = QWidget(objectName="scrollHolder")
         outer = QVBoxLayout(page)
-        outer.setContentsMargins(32, 18, 32, 18)
+        outer.setContentsMargins(32, 18, 24, 18)
         outer.setSpacing(14)
-        outer.addWidget(self._build_profiles_panel(), 1)
-        outer.addWidget(self._build_info_panel())
-        return page
+        outer.addWidget(self._build_info_panel())  # foundational: what is connected, and how
+        profiles = self._build_profiles_panel()
+        profiles.setMinimumHeight(380)
+        outer.addWidget(profiles)
+        outer.addWidget(self._build_baseline_panel())
+        outer.addStretch(1)
+        scroll.setWidget(page)
+        return scroll
+
+    def _build_baseline_panel(self):
+        frame = QFrame(objectName="panel")
+        self.baseline_layout = QVBoxLayout(frame)
+        self.baseline_layout.setContentsMargins(24, 16, 24, 18)
+        self.baseline_layout.setSpacing(10)
+        self.baseline_layout.addWidget(QLabel("RECOMMENDED BASELINE", objectName="panelTitle"))
+        self.baseline_hint = QLabel(
+            "Fanatec's recommended starting settings for your wheel base: a good baseline for a setup to fine-tune "
+            "from. All setups are backed up before it is applied.",
+            objectName="dim", wordWrap=True)
+        self.baseline_layout.addWidget(self.baseline_hint)
+        self.baseline_picker = None
+        row = QHBoxLayout()
+        row.addStretch(1)
+        self.baseline_btn = _button("APPLY BASELINE", accent=True)
+        self.baseline_btn.clicked.connect(self._apply_baseline_from_settings)
+        row.addWidget(self.baseline_btn)
+        self.baseline_layout.addLayout(row)
+        self.baseline_panel = frame
+        return frame
+
+    def _rebuild_baseline_picker(self):
+        if self.baseline_picker:
+            self.baseline_picker.setParent(None)
+            self.baseline_picker.deleteLater()
+            self.baseline_picker = None
+        self._slot_titles_key = None
+        if self.base and baselines_available(models_for(self.base.product)):
+            self.baseline_picker = BaselinePicker(self.params, self._known_values)
+            self.baseline_layout.insertWidget(2, self.baseline_picker)
+        self.baseline_panel.setVisible(self.baseline_picker is not None)
 
     def _build_info_panel(self):
         frame = QFrame(objectName="panel")
@@ -274,8 +324,35 @@ class MainWindow(QMainWindow):
             self.info_grid.addWidget(val, i % 5, col + 1)
         self.info_grid.setColumnStretch(1, 1)
         self.info_grid.setColumnStretch(3, 1)
+        self.model_choice = None  # ModelCombo when several models share the USB id
         v.addLayout(self.info_grid)
         return frame
+
+    def _rebuild_model_choice(self):
+        if self.model_choice:
+            self.model_choice.setParent(None)
+            self.model_choice.deleteLater()
+            self.model_choice = None
+        models = models_for(self.base.product) if self.base else ()
+        label = self.info_values["Wheel base"]
+        label.setVisible(len(models) <= 1)
+        if len(models) > 1:
+            self.model_choice = ModelCombo(models, self.model())
+            self.model_choice.currentIndexChanged.connect(lambda _i: self._set_model(self.model_choice.model()))
+            self.info_grid.addWidget(self.model_choice, 0, 1, Qt.AlignLeft)
+
+    def model(self):
+        """The user's wheel base model (asked once when several models share the USB id)."""
+        if not self.base:
+            return None
+        return find_model(self.base.product, self.state.models.get(f"{self.base.product:04x}"))
+
+    def _set_model(self, model):
+        if not self.base or model is None:
+            return
+        self.state.models[f"{self.base.product:04x}"] = model.key
+        self.state.save()
+        self._update_view()
 
     def _build_profiles_panel(self):
         page = QFrame(objectName="panel")
@@ -381,6 +458,8 @@ class MainWindow(QMainWindow):
             if not ctl.interacting():
                 ctl.set_value(self.draft.get(key, live.get(key)))
             ctl.set_dirty(key in self.draft)
+        if self.baseline_picker and self.baseline_picker.isVisible():
+            self.baseline_picker.refresh()
         if "SEN" in self.params:
             self.input_page.set_tuning(live.get("SEN"), self.params["SEN"].max, live.get("brF"))
         self._update_view()
@@ -399,6 +478,8 @@ class MainWindow(QMainWindow):
         self.live = {}
         self.params = params_for(base.product) if base else {}
         self._build_controls()
+        self._rebuild_baseline_picker()
+        self._rebuild_model_choice()
         if base:
             self.refresh()
         self._sync_input_reader()
@@ -449,16 +530,24 @@ class MainWindow(QMainWindow):
         slot = self.live.get("SLOT")
 
         if b:
-            series, model = PRODUCTS.get(b.product, ("FANATEC", f"WHEEL BASE {b.product:04X}"))
-            self.series_lbl.setText(series)
-            self.model_lbl.setText(model)
-            info = {"Wheel base": f"{model}  ({series})",
+            m = self.model()
+            if m:
+                self.series_lbl.setText(m.series)
+                self.model_lbl.setText(m.name)
+            else:
+                names = models_for(b.product)
+                self.series_lbl.setText(" / ".join(dict.fromkeys(x.series for x in names)) +
+                                        "  ·  choose your model in Settings")
+                self.model_lbl.setText(names[0].name)
+            self.boost_tag.setVisible(bool(m and m.boost))
+            info = {"Wheel base": m.label if m else "",
                     "Device": f"{b.name}  (USB {b.product:04X})",
                     "Firmware": b.info("fw_version") or "?",
                     "Rim id": b.info("wheel_id") or "?"}
         else:
             self.series_lbl.setText("")
             self.model_lbl.setText("NO WHEEL BASE")
+            self.boost_tag.hide()
             info = {"Wheel base": "not connected", "Device": "—", "Firmware": "—", "Rim id": "—"}
         info |= {"Updates": "live (kernel events)" if self.watcher.active else "polling every 1.5 s",
                  "Driver": driver_version(), "Kernel": os.uname().release,
@@ -520,6 +609,23 @@ class MainWindow(QMainWindow):
         self.revert_btn.setEnabled(bool(n) and idle)
         self.write_btn.setText(f"WRITE TO WHEEL BASE ({n})" if n else "WRITE TO WHEEL BASE")
         self.draft_lbl.setText(f"{n} unwritten change{'s' if n != 1 else ''}" if n else "")
+
+        # recommended baselines (settings page)
+        if self.baseline_picker:
+            self.baseline_picker.set_model(self.model())
+            titles = {n: self._slot_title(n) for n in store.SLOTS}
+            key = (tuple(titles.items()), slot)
+            if key != self._slot_titles_key:
+                self._slot_titles_key = key
+                self.baseline_picker.set_slots(titles, slot)
+            self.baseline_btn.setEnabled(ready and adv and idle and self.baseline_picker.baseline() is not None)
+            self.baseline_picker.current_box.setText(
+                f"Make this my current setup (recommended): {self._slot_title(slot)}" if slot
+                else "Make this my current setup (recommended)")
+        if (self.baseline_picker and ready and adv and idle and not self.state.onboarded
+                and not self._first_run_pending):
+            self._first_run_pending = True
+            QTimer.singleShot(300, self._show_first_run)
 
         # profiles page
         sel = self._selected() is not None
@@ -590,6 +696,7 @@ class MainWindow(QMainWindow):
     def _finish_op(self, on_done, result, error):
         self.busy = None
         self._op = None
+        self.statusBar().clearMessage()  # the "… in progress" message; on_done may show its own
         self.refresh()
         if error:
             self.statusBar().showMessage(f"Stopped: {error}", 15000)
@@ -780,6 +887,83 @@ class MainWindow(QMainWindow):
             event.accept()
         else:
             event.ignore()
+
+    # ==================================================================== recommended baselines
+    def _show_first_run(self):
+        if self.state.onboarded or not self.base or not self.baseline_picker or self.busy or not self._advanced():
+            self._first_run_pending = False
+            return
+        slot = self.live.get("SLOT")
+        dlg = FirstRunDialog(models_for(self.base.product), self.model(), self.params, self._known_values,
+                             {n: self._slot_title(n) for n in store.SLOTS}, slot, self)
+        dlg.picker.current_box.setText(f"Make this my current setup (recommended): {self._slot_title(slot)}")
+
+        def finished(result):
+            self.state.onboarded = True
+            self.state.save()
+            if dlg.chosen_model():
+                self._set_model(dlg.chosen_model())
+                if self.model_choice:
+                    self.model_choice.blockSignals(True)
+                    self.model_choice.setCurrentIndex(self.model_choice.findText(dlg.chosen_model().label))
+                    self.model_choice.blockSignals(False)
+            if result == QDialog.Accepted and dlg.use_baseline:
+                self._apply_baseline(dlg.picker.baseline(), dlg.picker.target_slot())
+            dlg.deleteLater()
+
+        dlg.finished.connect(finished)
+        self.first_run_dialog = dlg
+        dlg.open()
+
+    def _apply_baseline_from_settings(self):
+        p = self.baseline_picker
+        if not p or not p.baseline():
+            return
+        slot = p.target_slot()
+        ok = QMessageBox.question(
+            self, "Apply baseline",
+            f"Write Fanatec's recommended baseline for the {p.baseline().base} to {self._slot_title(slot)}?\n\n"
+            "All setups are backed up as an auto-backup profile first.")
+        if ok == QMessageBox.Yes:
+            self._apply_baseline(p.baseline(), slot)
+
+    def _known_values(self, slot):
+        """Last known tuning values of a setup: live for the active one, last seen for the others."""
+        if slot == self.live.get("SLOT"):
+            return self._tuning_values() or None
+        return self.state.seen.get(slot)
+
+    def _apply_baseline(self, baseline, slot):
+        if not self.base or self.busy or not baseline or not slot:
+            return
+        if not self._confirm_discard_draft("Applying a baseline"):
+            return
+
+        def op():
+            backup = yield from self._g_auto_backup()
+            start = self.base.read("SLOT")
+            yield from self._g_select(slot)
+            failed = yield from self._g_write(baseline.values)
+            if start != slot:
+                yield from self._g_select(start)  # writing to another setup doesn't change the active one
+            return backup, failed
+
+        def done(result):
+            backup, failed = result
+            if not self.state.aliases.get(slot):
+                self.state.aliases[slot] = "Recommended baseline"
+                self.state.save()
+            self._reload_profiles()
+            self.refresh()
+            if failed:
+                QMessageBox.warning(self, "Apply baseline", "The wheel base did not accept: " + ", ".join(
+                    f"{k}={w} (is {g})" for k, (w, g) in failed.items()))
+            else:
+                self.statusBar().showMessage(
+                    f"Applied the recommended baseline to {self._slot_title(slot)}. "
+                    f"Previous setups saved as “{backup}”.", 15000)
+
+        self._run("Applying the recommended baseline", op(), done)
 
     # ============================================================================= profiles
     def _reload_profiles(self, select: str | None = None):

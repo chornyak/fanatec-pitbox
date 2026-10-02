@@ -18,6 +18,11 @@ feedback and the tuning menu work on Linux at all. Fanatec Pitbox only reads and
 exposes, so you can tune your base with sliders instead of editing sysfs files. If this app is useful to you,
 please consider supporting and starring the driver project.
 
+The recommended baseline comes from Fanatec's own
+[Recommended Settings](https://forum.fanatec.com/topic/541-iracing-pc-fanatec-recommended-settings/) post on the
+Fanatec Community forum (its values are close to Fanatec's recommendations for other sims too); the app links to it as
+the source.
+
 ## Why this exists
 
 I built this for my own sim racing setup on Linux, because tuning the base meant writing values into sysfs files
@@ -36,6 +41,10 @@ not affiliated with or endorsed by Fanatec / Endor AG.
   handbrake, plus shifter and paddle inputs. The brake bar turns yellow at 100%, which makes setting BRF easy.
 - **Profiles & backup.** Save all 5 setups (and their names) as a profile and load them back. The current setups
   are backed up automatically before a profile is loaded or the tuning mode is changed.
+- **Recommended baseline.** Never tuned your wheel base? On first start the app asks which wheel base you have and
+  offers to start from Fanatec's recommended baseline, with your current values shown next to the recommended ones
+  so you can see what changes. It's written to your current setup after a backup, or you keep your settings as they
+  are. Available any time under *Settings → Recommended baseline*.
 - **Standard / Advanced mode** mirrors the base's own tuning menu.
 
 ## Requirements

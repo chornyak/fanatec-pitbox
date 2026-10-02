@@ -10,3 +10,5 @@ backups/
 BRIEF.md
 references/*.png
 references/*.webp
+references/*.html
+references/*_files/

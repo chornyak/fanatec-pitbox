@@ -77,7 +77,9 @@ class ProfileStoreTests(unittest.TestCase):
         self.assertEqual((s2.aliases[3], s2.seen[3], s2.loaded), ("iRacing", {"FF": 70}, "x"))
 
 
-class WindowTests(unittest.TestCase):
+class WindowBase(unittest.TestCase):
+    onboarded = True  # skip the first-run baseline offer unless a test is about it
+
     def setUp(self):
         global FAKE
         shutil.rmtree(TMP / "sys", ignore_errors=True)
@@ -93,6 +95,9 @@ class WindowTests(unittest.TestCase):
 
         self._patch = mock.patch.object(app_mod, "open_tuning_link", open_link)
         self._patch.start()
+        st = store.State()
+        st.onboarded = self.onboarded
+        st.save()
         self.win = MainWindow()
         self.wait_idle()  # initial read of the base's full settings (setup switch away and back)
 
@@ -108,6 +113,8 @@ class WindowTests(unittest.TestCase):
         pump(timeout, until=lambda: self.win.busy is None)
         self.assertIsNone(self.win.busy)
 
+
+class WindowTests(WindowBase):
     # -- basics ---------------------------------------------------------------------------
     def test_startup_reads_full_settings_and_returns_to_active_setup(self):
         self.assertEqual(self.fake.read("SLOT"), 2)
@@ -330,6 +337,129 @@ class WindowTests(unittest.TestCase):
         FAKE = self.fake = fakesys.FakeBase(TMP / "sys")
         self.win.refresh()
         self.assertIsNotNone(self.win.base)
+
+
+class BaselineTests(WindowBase):
+    onboarded = False
+
+    def first_run(self, model="CSL DD with Boost Kit (8 Nm)"):
+        pump(2, until=lambda: getattr(self.win, "first_run_dialog", None) is not None
+             and self.win.first_run_dialog.isVisible())
+        dlg = self.win.first_run_dialog
+        self.assertTrue(dlg.isVisible())
+        if model:
+            dlg.model_combo.setCurrentIndex(dlg.model_combo.findText(model))
+        return dlg
+
+    def test_model_must_be_chosen_because_the_usb_id_is_shared(self):
+        dlg = self.first_run(model=None)
+        labels = [dlg.model_combo.itemText(i) for i in range(dlg.model_combo.count())]
+        self.assertEqual(labels[0], "Choose your wheel base…")
+        self.assertIn("GT DD Pro (5 Nm)", labels)
+        self.assertIn("ClubSport DD (12 Nm)", labels)
+        self.assertFalse(dlg.continue_btn.isEnabled())
+        self.assertTrue(dlg.choice_widget.isHidden())
+        dlg.model_combo.setCurrentIndex(dlg.model_combo.findText("ClubSport DD (12 Nm)"))
+        self.assertTrue(dlg.continue_btn.isEnabled())
+        self.assertIn("same values are used for the ClubSport DD (12 Nm)", dlg.picker.preview.text())
+        dlg.keep_rb.click()
+        dlg.accept()
+        pump(0.2)
+        self.assertEqual(self.win.model().key, "clubsport-dd")  # remembered when keeping current settings too
+        self.assertEqual(self.win.series_lbl.text(), "CLUBSPORT")
+        self.assertTrue(self.win.boost_tag.isHidden())
+
+    def test_table_shows_current_and_recommended_with_changes_highlighted(self):
+        self.fake.slots[2]["INT"] = 11
+        self.fake._put({"INT": 11})
+        self.win.refresh()
+        dlg = self.first_run()
+        text = dlg.picker.preview.text()
+        self.assertIn("Current", text)
+        self.assertIn("Recommended", text)
+        self.assertRegex(text, r"\[INT\] FFB Interpolation Filter</td><td[^>]*>11</td><td style='[^']*f2e600[^']*'>6<")
+        self.assertRegex(text, r"\[NDP\] Natural Damper</td><td[^>]*>15%</td><td style='padding:3px 0;'>15%<")
+        self.assertIn("1 value will change", text)
+        self.assertNotIn("same values are used", text)  # the post names the CSL DD
+        dlg.keep_rb.click()
+        self.assertTrue(dlg.scroll.isHidden())
+        self.assertFalse(dlg.keep_note.isHidden())
+
+    def test_first_run_writes_baseline_to_current_setup(self):
+        self.fake.slots[2]["INT"] = 11
+        self.fake._put({"INT": 11})
+        self.win.refresh()
+        dlg = self.first_run()
+        self.assertTrue(dlg.recommended_rb.isChecked())
+        self.assertTrue(dlg.picker.current_box.isChecked())
+        dlg.accept()
+        self.wait_idle(20)
+        self.fake.sync()
+        s2 = self.fake.slots[2]
+        self.assertEqual((s2["SEN"], s2["FF"], s2["NDP"], s2["INT"], s2["DPR"]), (1080, 100, 15, 6, 100))
+        self.assertEqual(self.links[-1].brf[2], 90)  # BRF is personal preference: untouched
+        self.assertEqual(self.win.state.aliases[2], "Recommended baseline")
+        self.assertTrue(store.State().onboarded)
+        self.assertEqual(store.State().models, {"0020": "csl-dd-boost"})
+        self.assertFalse(self.win.boost_tag.isHidden())
+        self.assertTrue(any(p.name.startswith("Auto-backup") for p in store.load_all()))
+
+    def test_first_run_to_another_setup_keeps_the_active_one(self):
+        dlg = self.first_run()
+        dlg.picker.current_box.setChecked(False)
+        dlg.picker.slot_combo.setCurrentIndex(dlg.picker.slot_combo.findData(4))
+        self.assertEqual(dlg.picker.target_slot(), 4)
+        before2 = dict(self.fake.slots[2])
+        dlg.accept()
+        self.wait_idle(20)
+        self.fake.sync()
+        self.assertEqual((self.fake.slots[4]["SEN"], self.fake.slots[4]["NDP"], self.fake.slots[4]["INT"]),
+                         (1080, 15, 6))
+        self.assertEqual(self.fake.slots[2], before2)
+        self.assertEqual(self.fake.read("SLOT"), 2)
+        self.assertEqual(self.win.state.aliases, {4: "Recommended baseline"})
+
+    def test_keep_current_settings_changes_nothing_and_is_not_asked_again(self):
+        dlg = self.first_run()
+        before = {n: dict(v) for n, v in self.fake.slots.items()}
+        dlg.keep_rb.click()
+        dlg.accept()
+        pump(0.5)
+        self.assertEqual(self.fake.slots, before)
+        self.assertTrue(store.State().onboarded)
+        self.assertIsNone(self.win.busy)
+
+    def test_closing_the_dialog_without_a_model(self):
+        self.first_run(model=None).reject()
+        pump(0.3)
+        self.assertTrue(store.State().onboarded)
+        self.assertIn("choose your model in Settings", self.win.series_lbl.text())
+
+    def test_settings_model_choice_and_baseline(self):
+        self.first_run(model=None).reject()
+        pump(0.2)
+        self.assertFalse(self.win.baseline_btn.isEnabled())  # no model chosen yet
+        choice = self.win.model_choice
+        choice.setCurrentIndex(choice.findText("CSL DD (5 Nm)"))
+        self.assertEqual(self.win.model().key, "csl-dd")
+        self.assertTrue(self.win.baseline_btn.isEnabled())
+        self.fake.slots[2]["NDP"] = 40
+        self.fake._put({"NDP": 40})
+        with mock.patch.object(QMessageBox, "question", return_value=QMessageBox.Yes):
+            self.win.baseline_btn.click()
+        self.wait_idle(20)
+        self.fake.sync()
+        self.assertEqual(self.fake.slots[2]["NDP"], 15)
+
+    def test_single_model_ids_need_no_choice(self):
+        from fanatec_pitbox.baseline_ui import FirstRunDialog
+        from fanatec_pitbox.params import models_for
+        dlg = FirstRunDialog(models_for(0x0006), None, params_for(0x0006), lambda slot: None, {1: "SETUP 1"}, 1)
+        self.assertIsNone(dlg.model_combo)
+        self.assertEqual(dlg.chosen_model().key, "podium-dd1")
+        self.assertTrue(dlg.continue_btn.isEnabled())
+        self.assertTrue(dlg.use_baseline)
+        dlg.deleteLater()
 
 
 if __name__ == "__main__":
