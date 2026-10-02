@@ -10,7 +10,9 @@ test, and backups of your setups. It is a graphical helper on top of the
 
 | Input test | Settings, profiles & backup |
 |---|---|
-| ![Live steering, pedals and shifter](docs/screenshots/input-test.png) | ![Profiles of all 5 setups, wheel base info](docs/screenshots/settings.png) |
+| ![Live steering, pedals and shifter](docs/screenshots/input-test.png) | ![Wheel base info and profiles of all 5 setups](docs/screenshots/settings.png) |
+| **Welcome screen** | **Recommended baseline** |
+| ![First start: pick your wheel base and start from Fanatec's recommended baseline](docs/screenshots/welcome.png) | ![Current vs recommended values, with what changes highlighted](docs/screenshots/baseline.png) |
 
 ## Credit where it's due
 
