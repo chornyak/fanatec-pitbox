@@ -13,4 +13,4 @@ fanatec-pitbox = "fanatec_pitbox.__main__:main"
 packages = ["fanatec_pitbox"]
 
 [tool.setuptools.package-data]
-fanatec_pitbox = ["style.qss"]
+fanatec_pitbox = ["style.qss", "icons/*.svg"]

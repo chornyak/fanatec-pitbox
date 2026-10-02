@@ -3,7 +3,7 @@ import sys
 from PySide6.QtWidgets import QApplication
 
 from . import profiles
-from .app import MainWindow, load_stylesheet
+from .app import MainWindow, app_icon, load_stylesheet
 
 
 def main() -> int:
@@ -12,6 +12,7 @@ def main() -> int:
     app.setApplicationName("fanatec-pitbox")
     app.setApplicationDisplayName("Fanatec Pitbox")
     app.setDesktopFileName("fanatec-pitbox")
+    app.setWindowIcon(app_icon())
     app.setStyle("Fusion")
     app.setStyleSheet(load_stylesheet())
     win = MainWindow()

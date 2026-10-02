@@ -8,7 +8,8 @@ from pathlib import Path
 from importlib import resources
 
 from PySide6.QtCore import Qt, QTimer, QUrl
-from PySide6.QtGui import QDesktopServices, QIcon
+from PySide6.QtGui import QDesktopServices, QIcon, QPainter, QPixmap
+from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QCheckBox, QDialog, QFrame, QGridLayout, QHBoxLayout,
                                QInputDialog, QLabel, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
                                QPushButton, QScrollArea, QStackedWidget, QVBoxLayout, QWidget)
@@ -55,7 +56,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Fanatec Pitbox")
-        self.setWindowIcon(QIcon.fromTheme("input-gaming"))
+        self.setWindowIcon(app_icon())
         self.resize(1360, 880)
 
         self.base: WheelBase | None = None
@@ -1124,6 +1125,23 @@ def driver_version() -> str:
         return "srcversion " + Path("/sys/module/hid_fanatec/srcversion").read_text().strip()
     except OSError:
         return "not loaded"
+
+
+def app_icon() -> QIcon:
+    """The wheel icon; a simplified, lighter version is used up to 32 px so it stays readable."""
+    icons = resources.files(__package__).joinpath("icons")
+    icon = QIcon(str(icons.joinpath("fanatec-pitbox.svg")))
+    # Qt picks SVG files by mode only, not by size, so the small sizes are added as rendered pixmaps
+    small = QSvgRenderer(str(icons.joinpath("fanatec-pitbox-small.svg")))
+    for size in (16, 22, 24, 32):
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing)
+        small.render(painter)
+        painter.end()
+        icon.addPixmap(pixmap)
+    return icon
 
 
 def load_stylesheet() -> str:

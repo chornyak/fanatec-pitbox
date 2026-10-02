@@ -1,3 +1,5 @@
+<img src="fanatec_pitbox/icons/fanatec-pitbox.svg" width="96" align="right" alt="">
+
 # Fanatec Pitbox
 
 A small Linux desktop app for tuning Fanatec wheel bases: the tuning menu, the base's 5 setups, a live input
