@@ -1,0 +1,16 @@
+[project]
+name = "fanatec-pitbox"
+version = "0.1.0"
+description = "Tuning, setups and input test for Fanatec wheel bases on Linux, on top of the hid-fanatecff driver"
+requires-python = ">=3.11"
+license = "GPL-2.0-only"
+dependencies = ["PySide6"]
+
+[project.scripts]
+fanatec-pitbox = "fanatec_pitbox.__main__:main"
+
+[tool.setuptools]
+packages = ["fanatec_pitbox"]
+
+[tool.setuptools.package-data]
+fanatec_pitbox = ["style.qss"]

@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+tools/probe-logs/
+
+# local only: the driver's own repository, personal setup backups, the original plan, Fanatec's screenshots
+hid-fanatecff/
+backups/
+BRIEF.md
+references/*.png
+references/*.webp
