@@ -303,6 +303,7 @@ class MainWindow(QMainWindow):
         self._slot_titles_key = None
         if self.base and baselines_available(models_for(self.base.product)):
             self.baseline_picker = BaselinePicker(self.params, self._known_values)
+            self.baseline_picker.values_needed.connect(lambda _slot: self._read_unknown_setups())
             self.baseline_layout.insertWidget(2, self.baseline_picker)
         self.baseline_panel.setVisible(self.baseline_picker is not None)
 
@@ -898,6 +899,7 @@ class MainWindow(QMainWindow):
         dlg = FirstRunDialog(models_for(self.base.product), self.model(), self.params, self._known_values,
                              {n: self._slot_title(n) for n in store.SLOTS}, slot, self)
         dlg.picker.current_box.setText(f"Make this my current setup (recommended): {self._slot_title(slot)}")
+        dlg.picker.values_needed.connect(lambda _slot: self._read_unknown_setups())
 
         def finished(result):
             self.state.onboarded = True
@@ -927,6 +929,23 @@ class MainWindow(QMainWindow):
             "All setups are backed up as an auto-backup profile first.")
         if ok == QMessageBox.Yes:
             self._apply_baseline(p.baseline(), slot)
+
+    def _read_unknown_setups(self):
+        """Read all 5 setups (as Save setups does) when a setup's values are still unknown, so the
+        recommended-baseline table can show them. Skipped while busy, with unwritten changes or in Standard mode."""
+        if (not self.base or self.busy or self.draft or not self._advanced() or not self.base.ready()
+                or all(n in self.state.seen for n in store.SLOTS)):
+            return
+
+        def done(_slots):
+            for picker in (self.baseline_picker, getattr(getattr(self, "first_run_dialog", None), "picker", None)):
+                if picker is not None:
+                    try:
+                        picker.refresh()
+                    except RuntimeError:  # dialog already closed
+                        pass
+
+        QTimer.singleShot(0, lambda: self.busy is None and self._run("Reading setups", self._g_read_all_slots(), done))
 
     def _known_values(self, slot):
         """Last known tuning values of a setup: live for the active one, last seen for the others."""

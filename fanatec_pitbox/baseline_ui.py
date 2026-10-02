@@ -12,6 +12,7 @@ class BaselinePicker(QWidget):
     """Target setup plus a table of the setup's current values next to the recommended ones."""
 
     changed = Signal()
+    values_needed = Signal(int)  # the target setup's current values are unknown; the app can read them
 
     def __init__(self, params: dict, current_values, parent=None):
         """`current_values(slot)` returns the last known values of a setup, or None if unknown."""
@@ -88,6 +89,8 @@ class BaselinePicker(QWidget):
             return
         slot = self.target_slot()
         current = (self.current_values(slot) if slot else None) or {}
+        if slot and not current:
+            self.values_needed.emit(slot)
         head = ("<tr><td></td><td style='padding:0 28px 6px 0;color:#8a8d93'>Current</td>"
                 "<td style='padding:0 0 6px 0;color:#8a8d93'>Recommended</td></tr>")
         rows, changes = [], 0

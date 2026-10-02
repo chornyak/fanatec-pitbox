@@ -451,6 +451,34 @@ class BaselineTests(WindowBase):
         self.fake.sync()
         self.assertEqual(self.fake.slots[2]["NDP"], 15)
 
+    def test_unknown_setups_are_read_for_the_table(self):
+        dlg = self.first_run()
+        dlg.keep_rb.click()
+        dlg.accept()
+        pump(0.3)
+        self.assertNotIn(5, self.win.state.seen)  # never read so far
+        picker = self.win.baseline_picker
+        picker.current_box.setChecked(False)
+        picker.slot_combo.setCurrentIndex(picker.slot_combo.findData(5))
+        self.wait_idle(10)
+        pump(0.2)
+        self.assertEqual(sorted(self.win.state.seen), [1, 2, 3, 4, 5])
+        self.assertEqual(self.fake.read("SLOT"), 2)  # back on the active setup
+        self.assertIn("will change", picker.preview.text())
+        self.assertRegex(picker.preview.text(), r"\[NDP\] Natural Damper</td><td[^>]*>50%</td>")
+
+    def test_unknown_setups_are_not_read_with_unwritten_changes(self):
+        self.first_run().reject()
+        pump(0.3)
+        self.win.controls["FF"].slider.setValue(60)
+        picker = self.win.baseline_picker
+        picker.current_box.setChecked(False)
+        picker.slot_combo.setCurrentIndex(picker.slot_combo.findData(5))
+        pump(0.5)
+        self.assertIsNone(self.win.busy)
+        self.assertNotIn(5, self.win.state.seen)
+        self.assertEqual(self.win.draft, {"FF": 60})
+
     def test_single_model_ids_need_no_choice(self):
         from fanatec_pitbox.baseline_ui import FirstRunDialog
         from fanatec_pitbox.params import models_for
