@@ -8,6 +8,9 @@ from .app import MainWindow, app_icon, load_stylesheet
 
 def main() -> int:
     profiles.migrate_old_config()
+    if len(sys.argv) > 1:  # command line use (e.g. Steam launch options); no window
+        from .cli import main as cli_main
+        return cli_main(sys.argv[1:])
     app = QApplication(sys.argv)
     app.setApplicationName("fanatec-pitbox")
     app.setApplicationDisplayName("Fanatec Pitbox")

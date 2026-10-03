@@ -1,8 +1,7 @@
-"""Fanatec's recommended baseline: the first-run dialog and the Settings panel share BaselinePicker."""
+"""Fanatec's recommended baseline: the first-run wizard and the Settings panel share BaselinePicker."""
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel, QPushButton,
-                               QRadioButton, QScrollArea, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from .baselines import SOURCE, SOURCE_TITLE, Baseline, baseline_for
 from .params import Model
@@ -104,8 +103,12 @@ class BaselinePicker(QWidget):
             rows.append(f"<tr><td style='padding:3px 28px 3px 0;color:#c9c9c9'>[{key.upper()}] {p.label}</td>"
                         f"<td style='padding:3px 28px 3px 0;color:#8a8d93'>{p.fmt(old) if old is not None else '—'}"
                         f"</td><td style='padding:3px 0;{style}'>{p.fmt(new)}</td></tr>")
-        summary = (f"<span style='color:#f2e600'>{changes} value{'s' if changes != 1 else ''} will change.</span> "
-                   if current else "")
+        if not current:
+            summary = ""
+        elif changes:
+            summary = f"<span style='color:#f2e600'>{changes} value{'s' if changes != 1 else ''} will change.</span> "
+        else:
+            summary = "<span style='color:#3cc46a'>Already matches the recommended baseline.</span> "
         note = b.note.replace("{label}", m.label) if b.note and m.key not in b.named else ""
         self.preview.setText(
             f"<table>{head}{''.join(rows)}</table>"
@@ -129,95 +132,3 @@ class ModelCombo(QComboBox):
 
     def model(self) -> Model | None:
         return self.currentData()
-
-
-class FirstRunDialog(QDialog):
-    """Shown once: confirms the wheel base model and offers Fanatec's recommended baseline."""
-
-    def __init__(self, models, current: Model | None, params: dict, current_values, slot_titles: dict,
-                 active: int, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Welcome to Fanatec Pitbox")
-        self.resize(720, 780)
-        self._only_model = models[0] if len(models) == 1 else None
-        v = QVBoxLayout(self)
-        v.setContentsMargins(24, 20, 24, 18)
-        v.setSpacing(12)
-        v.addWidget(QLabel("Welcome to Fanatec Pitbox", objectName="sideTitle"))
-
-        self.model_combo = None
-        if len(models) > 1:
-            v.addWidget(QLabel("Which wheel base do you have? Several models share the same USB id, so the app "
-                               "can't tell them apart on its own.", wordWrap=True))
-            self.model_combo = ModelCombo(models, current)
-            row = QHBoxLayout()
-            row.addWidget(self.model_combo)
-            row.addStretch(1)
-            v.addLayout(row)
-        else:
-            v.addWidget(QLabel(f"Detected wheel base: <b>{models[0].label}</b>"))
-
-        self.choice_widget = QWidget()
-        choice = QVBoxLayout(self.choice_widget)
-        choice.setContentsMargins(0, 6, 0, 0)
-        choice.setSpacing(8)
-        choice.addWidget(QLabel("How would you like to start?"))
-        self.choice = QButtonGroup(self)
-        self.recommended_rb = QRadioButton("Start with Fanatec's recommended baseline (recommended)")
-        self.keep_rb = QRadioButton("Keep my current settings")
-        self.recommended_rb.setChecked(True)
-        for i, rb in enumerate((self.recommended_rb, self.keep_rb)):
-            self.choice.addButton(rb, i)
-            choice.addWidget(rb)
-        self.choice.idClicked.connect(lambda _i: self._update())
-        v.addWidget(self.choice_widget)
-
-        self.picker = BaselinePicker(params, current_values)
-        self.picker.set_slots(slot_titles, active)
-        self.scroll = QScrollArea(widgetResizable=True)
-        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        holder = QWidget(objectName="scrollHolder")
-        hl = QVBoxLayout(holder)
-        hl.setContentsMargins(0, 0, 10, 0)
-        hl.addWidget(self.picker)
-        hl.addStretch(1)
-        self.scroll.setWidget(holder)
-        v.addWidget(self.scroll, 1)
-        self.keep_note = QLabel("Nothing on your wheel base is changed. You can apply the recommended baseline "
-                                "any time under <b>Settings → Recommended baseline</b>.", wordWrap=True,
-                                objectName="dim")
-        self.keep_note.setTextFormat(Qt.RichText)
-        v.addWidget(self.keep_note)
-        self.spacer = QWidget()
-        v.addWidget(self.spacer, 1)
-
-        buttons = QHBoxLayout()
-        buttons.addStretch(1)
-        self.continue_btn = QPushButton("CONTINUE")
-        self.continue_btn.setProperty("accent", True)
-        self.continue_btn.setDefault(True)
-        self.continue_btn.clicked.connect(self.accept)
-        buttons.addWidget(self.continue_btn)
-        v.addLayout(buttons)
-
-        if self.model_combo:
-            self.model_combo.currentIndexChanged.connect(lambda _i: self._update())
-        self._update()
-
-    def chosen_model(self) -> Model | None:
-        return self.model_combo.model() if self.model_combo else self._only_model
-
-    @property
-    def use_baseline(self) -> bool:
-        return self.recommended_rb.isChecked() and self.picker.baseline() is not None
-
-    def _update(self):
-        model = self.chosen_model()
-        self.picker.set_model(model)
-        has_baseline = self.picker.baseline() is not None
-        self.choice_widget.setVisible(has_baseline)
-        show_table = model is None or (has_baseline and self.recommended_rb.isChecked())
-        self.scroll.setVisible(show_table)
-        self.spacer.setVisible(not show_table)
-        self.keep_note.setVisible(has_baseline and self.keep_rb.isChecked())
-        self.continue_btn.setEnabled(model is not None)

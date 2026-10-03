@@ -1,3 +1,5 @@
 #!/bin/sh
 # Launch Fanatec Pitbox from this checkout, from any working directory.
-cd "$(dirname "$(readlink -f "$0")")" && exec python -m fanatec_pitbox "$@"
+# The working directory is left alone: with --setup N %command% the game must start where Steam put it.
+DIR=$(dirname "$(readlink -f "$0")")
+PYTHONPATH="$DIR${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m fanatec_pitbox "$@"

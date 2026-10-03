@@ -18,12 +18,14 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from PySide6.QtWidgets import QApplication, QInputDialog, QMessageBox  # noqa: E402
+from PySide6.QtCore import QEvent, QTimer  # noqa: E402
+from PySide6.QtWidgets import QApplication, QInputDialog, QLabel, QMessageBox  # noqa: E402
 
 import fakesys  # noqa: E402
 from fanatec_pitbox import app as app_mod  # noqa: E402
 from fanatec_pitbox import profiles as store  # noqa: E402
 from fanatec_pitbox.app import MainWindow  # noqa: E402
+from fanatec_pitbox.checks import FAIL, OK, WARN, Check  # noqa: E402
 from fanatec_pitbox.params import params_for  # noqa: E402
 
 app = QApplication.instance() or QApplication([])
@@ -95,6 +97,10 @@ class WindowBase(unittest.TestCase):
 
         self._patch = mock.patch.object(app_mod, "open_tuning_link", open_link)
         self._patch.start()
+        self.checks = [Check("hid-fanatecff driver", OK, "The driver is loaded."),
+                       Check("Steering and pedal deadzone", WARN, "The axes have a deadzone.", "sudo pacman -S joyutils")]
+        self._patch_checks = mock.patch.object(app_mod, "run_checks", lambda base=None: self.checks)
+        self._patch_checks.start()
         st = store.State()
         st.onboarded = self.onboarded
         st.save()
@@ -103,10 +109,18 @@ class WindowBase(unittest.TestCase):
 
     def tearDown(self):
         self._patch.stop()
-        self.win.busy = None  # never leave a modal "please wait" dialog behind
-        self.win.draft.clear()
-        self.win.close()
-        self.win.deleteLater()
+        self._patch_checks.stop()
+        # Shut down every window from this test (some tests replace self.win): stop their timers and really
+        # delete them, so nothing keeps polling the next test's fake wheel base.
+        for w in app.topLevelWidgets():
+            if isinstance(w, MainWindow):
+                w.busy = None  # never leave a modal "please wait" dialog behind
+                w.draft.clear()
+                for timer in w.findChildren(QTimer):
+                    timer.stop()
+                w.close()
+                w.deleteLater()
+        QApplication.sendPostedEvents(None, QEvent.DeferredDelete)
         pump(0.05)
 
     def wait_idle(self, timeout=10):
@@ -342,13 +356,23 @@ class WindowTests(WindowBase):
 class BaselineTests(WindowBase):
     onboarded = False
 
-    def first_run(self, model="CSL DD with Boost Kit (8 Nm)"):
+    def wizard(self):
         pump(2, until=lambda: getattr(self.win, "first_run_dialog", None) is not None
              and self.win.first_run_dialog.isVisible())
         dlg = self.win.first_run_dialog
         self.assertTrue(dlg.isVisible())
+        return dlg
+
+    def first_run(self, model="CSL DD with Boost Kit (8 Nm)"):
+        """Open the wizard and go to the model step; with a model, choose it and go on to the baseline step."""
+        dlg = self.wizard()
+        self.assertIn("STEP 1 OF 3", dlg.step_lbl.text())
+        dlg.next_btn.click()
+        self.assertIn("YOUR WHEEL BASE", dlg.step_lbl.text())
         if model:
             dlg.model_combo.setCurrentIndex(dlg.model_combo.findText(model))
+            dlg.next_btn.click()
+            self.assertIn("STARTING POINT", dlg.step_lbl.text())
         return dlg
 
     def test_model_must_be_chosen_because_the_usb_id_is_shared(self):
@@ -357,13 +381,15 @@ class BaselineTests(WindowBase):
         self.assertEqual(labels[0], "Choose your wheel base…")
         self.assertIn("GT DD Pro (5 Nm)", labels)
         self.assertIn("ClubSport DD (12 Nm)", labels)
-        self.assertFalse(dlg.continue_btn.isEnabled())
-        self.assertTrue(dlg.choice_widget.isHidden())
+        self.assertFalse(dlg.next_btn.isEnabled())
         dlg.model_combo.setCurrentIndex(dlg.model_combo.findText("ClubSport DD (12 Nm)"))
-        self.assertTrue(dlg.continue_btn.isEnabled())
+        self.assertTrue(dlg.next_btn.isEnabled())
+        dlg.next_btn.click()
         self.assertIn("same values are used for the ClubSport DD (12 Nm)", dlg.picker.preview.text())
+        self.assertEqual(dlg.next_btn.text(), "APPLY AND FINISH")
         dlg.keep_rb.click()
-        dlg.accept()
+        self.assertEqual(dlg.next_btn.text(), "FINISH")
+        dlg.next_btn.click()
         pump(0.2)
         self.assertEqual(self.win.model().key, "clubsport-dd")  # remembered when keeping current settings too
         self.assertEqual(self.win.series_lbl.text(), "CLUBSPORT")
@@ -435,21 +461,43 @@ class BaselineTests(WindowBase):
         self.assertTrue(store.State().onboarded)
         self.assertIn("choose your model in Settings", self.win.series_lbl.text())
 
-    def test_settings_model_choice_and_baseline(self):
+    def open_baseline(self):
+        self.win.baseline_btn.click()
+        pump(0.2)
+        dlg = self.win.baseline_dialog
+        self.assertTrue(dlg.isVisible())
+        return dlg
+
+    def test_baseline_window_asks_for_the_model_when_unknown(self):
         self.first_run(model=None).reject()
         pump(0.2)
-        self.assertFalse(self.win.baseline_btn.isEnabled())  # no model chosen yet
-        choice = self.win.model_choice
-        choice.setCurrentIndex(choice.findText("CSL DD (5 Nm)"))
-        self.assertEqual(self.win.model().key, "csl-dd")
         self.assertTrue(self.win.baseline_btn.isEnabled())
+        dlg = self.open_baseline()
+        self.assertFalse(dlg.apply_btn.isEnabled())  # no model chosen yet
+        dlg.model_combo.setCurrentIndex(dlg.model_combo.findText("CSL DD (5 Nm)"))
+        self.assertTrue(dlg.apply_btn.isEnabled())
         self.fake.slots[2]["NDP"] = 40
         self.fake._put({"NDP": 40})
-        with mock.patch.object(QMessageBox, "question", return_value=QMessageBox.Yes):
-            self.win.baseline_btn.click()
+        self.win.refresh()
+        dlg.picker.refresh()
+        self.assertIn("1 value will change", dlg.picker.preview.text())
+        dlg.accept()
         self.wait_idle(20)
         self.fake.sync()
         self.assertEqual(self.fake.slots[2]["NDP"], 15)
+        self.assertEqual(self.win.model().key, "csl-dd")  # remembered
+
+    def test_baseline_window_cancel_changes_nothing(self):
+        self.first_run().accept()  # finish the wizard (applies to SETUP 2)
+        self.wait_idle(20)
+        before = {n: dict(v) for n, v in self.fake.slots.items()}
+        dlg = self.open_baseline()
+        self.assertEqual(dlg.model_combo.currentText(), "CSL DD with Boost Kit (8 Nm)")
+        self.assertIn("Already matches the recommended baseline", dlg.picker.preview.text())
+        dlg.reject()
+        pump(0.3)
+        self.fake.sync()
+        self.assertEqual(self.fake.slots, before)
 
     def test_unknown_setups_are_read_for_the_table(self):
         dlg = self.first_run()
@@ -457,7 +505,7 @@ class BaselineTests(WindowBase):
         dlg.accept()
         pump(0.3)
         self.assertNotIn(5, self.win.state.seen)  # never read so far
-        picker = self.win.baseline_picker
+        picker = self.open_baseline().picker
         picker.current_box.setChecked(False)
         picker.slot_combo.setCurrentIndex(picker.slot_combo.findData(5))
         self.wait_idle(10)
@@ -471,7 +519,7 @@ class BaselineTests(WindowBase):
         self.first_run().reject()
         pump(0.3)
         self.win.controls["FF"].slider.setValue(60)
-        picker = self.win.baseline_picker
+        picker = self.open_baseline().picker
         picker.current_box.setChecked(False)
         picker.slot_combo.setCurrentIndex(picker.slot_combo.findData(5))
         pump(0.5)
@@ -480,14 +528,76 @@ class BaselineTests(WindowBase):
         self.assertEqual(self.win.draft, {"FF": 60})
 
     def test_single_model_ids_need_no_choice(self):
-        from fanatec_pitbox.baseline_ui import FirstRunDialog
         from fanatec_pitbox.params import models_for
-        dlg = FirstRunDialog(models_for(0x0006), None, params_for(0x0006), lambda slot: None, {1: "SETUP 1"}, 1)
-        self.assertIsNone(dlg.model_combo)
+        from fanatec_pitbox.wizard import FirstRunDialog
+        dlg = FirstRunDialog(lambda: self.checks, models_for(0x0006), None, params_for(0x0006), lambda slot: None,
+                             {1: "SETUP 1"}, 1, True)
+        self.assertEqual([t for t, _ in dlg.steps], ["Check your system", "Starting point"])
         self.assertEqual(dlg.chosen_model().key, "podium-dd1")
-        self.assertTrue(dlg.continue_btn.isEnabled())
+        dlg.next_btn.click()
         self.assertTrue(dlg.use_baseline)
         dlg.deleteLater()
+
+    def test_check_step_lists_checks_with_fix_commands(self):
+        dlg = self.wizard()
+        self.assertIn("1 suggestion", dlg.check_summary.text())
+        cmds = [w.text() for w in dlg.check_list.findChildren(QLabel) if w.objectName() == "fixCommand"]
+        self.assertEqual(cmds, ["sudo pacman -S joyutils"])
+        self.checks = [Check("hid-fanatecff driver", OK, "The driver is loaded.")]
+        dlg.recheck()
+        self.assertEqual(dlg.check_summary.text(), "Everything is set up")
+        dlg.reject()
+
+    def test_without_a_wheel_base_only_the_check_is_shown_and_it_comes_back(self):
+        global FAKE
+        self.win.close()
+        shutil.rmtree(self.fake.dev)
+        FAKE = None
+        self.checks = [Check("Wheel base", FAIL, "No Fanatec wheel base found.")]
+        self.win = MainWindow()
+        dlg = self.wizard()
+        self.assertEqual(len(dlg.steps), 1)
+        self.assertEqual(dlg.next_btn.text(), "FINISH")
+        self.assertIn("1 problem to fix", dlg.check_summary.text())
+        dlg.next_btn.click()
+        pump(0.2)
+        self.assertFalse(store.State().onboarded)  # shown again on the next start
+
+
+class SettingsPanelTests(WindowBase):
+    def test_system_check_summary_and_popup(self):
+        self.win.tab_group.button(2).click()
+        mark = self.win.check_mark  # one mark next to the button in Wheel base & system
+        self.assertEqual((mark.text(), mark.property("state")), ("!", "warn"))
+        self.assertIn("1 suggestion", mark.toolTip())
+        self.checks = [Check("hid-fanatecff driver", FAIL, "Not loaded.", "sudo modprobe hid_fanatec")]
+        self.win._open_system_check()
+        dlg = self.win.system_check_dialog
+        self.assertTrue(dlg.isVisible())
+        self.assertIn("1 problem to fix", dlg.summary.text())
+        cmds = [w.text() for w in dlg.check_list.findChildren(QLabel) if w.objectName() == "fixCommand"]
+        self.assertEqual(cmds, ["sudo modprobe hid_fanatec"])
+        dlg.accept()
+        pump(0.1)
+        self.assertEqual((mark.text(), mark.property("state")), ("!", "fail"))  # refreshed on close
+        self.checks = [Check("hid-fanatecff driver", OK, "The driver is loaded.")]
+        self.win._recheck_system()
+        self.assertEqual((mark.text(), mark.property("state")), ("✓", "ok"))
+
+    def test_steam_launch_line_for_the_chosen_setup(self):
+        self.win.state.aliases[3] = "iRacing"
+        self.win._update_view()
+        combo, cmd = self.win.steam_setup, self.win.steam_cmd
+        self.assertEqual(combo.currentData(), 2)  # starts on the active setup
+        self.assertTrue(cmd.text().endswith("fanatec-pitbox --setup 2 %command%"), cmd.text())
+        combo.setCurrentIndex(combo.findData(3))
+        self.assertEqual(combo.currentText(), "SETUP 3 · iRacing")
+        self.assertTrue(cmd.text().endswith("fanatec-pitbox --setup 3 %command%"), cmd.text())
+        self.win.steam_copy.click()
+        self.assertEqual(QApplication.clipboard().text(), cmd.text())
+        self.win._update_view()
+        self.assertEqual(combo.currentData(), 3)  # the user's choice is kept
+
 
 
 if __name__ == "__main__":

@@ -10,9 +10,9 @@ test, and backups of your setups. It is a graphical helper on top of the
 
 | Input test | Settings, profiles & backup |
 |---|---|
-| ![Live steering, pedals and shifter](docs/screenshots/input-test.png) | ![Wheel base info and profiles of all 5 setups](docs/screenshots/settings.png) |
-| **Welcome screen** | **Recommended baseline** |
-| ![First start: pick your wheel base and start from Fanatec's recommended baseline](docs/screenshots/welcome.png) | ![Current vs recommended values, with what changes highlighted](docs/screenshots/baseline.png) |
+| ![Live steering, pedals and shifter](docs/screenshots/input-test.png) | ![Wheel base info, system check and profiles of all 5 setups](docs/screenshots/settings.png) |
+| **Welcome: system check** | **Recommended baseline** |
+| ![First start: a check of everything the app needs, then your wheel base and a starting point](docs/screenshots/welcome.png) | ![Current vs recommended values, with what changes highlighted](docs/screenshots/baseline.png) |
 
 ## Credit where it's due
 
@@ -48,7 +48,12 @@ not affiliated with or endorsed by Fanatec / Endor AG.
 - **Recommended baseline.** Never tuned your wheel base? On first start the app asks which wheel base you have and
   offers to start from Fanatec's recommended baseline, with your current values shown next to the recommended ones
   so you can see what changes. It's written to your current setup after a backup, or you keep your settings as they
-  are. Available any time under *Settings → Recommended baseline*.
+  are. Available any time with *Recommended baseline…* on the Settings page.
+- **System check.** On first start, and any time with *System check…* on the Settings page: the app checks the driver, the
+  wheel base, permissions and the axis deadzone, and shows the exact command to fix anything that's missing.
+- **Switch setups from Steam.** Put `fanatec-pitbox --setup 3 %command%` in a game's launch options and the wheel base
+  switches to that setup when the game starts (*Settings → Steam launch options* has the line for each setup, ready
+  to copy). If anything goes wrong, the game still starts.
 - **Standard / Advanced mode** mirrors the base's own tuning menu.
 
 ## Requirements
@@ -68,6 +73,10 @@ cd fanatec-pitbox
 ./fanatec-pitbox          # start the app
 ./install-desktop.sh      # optional: add "Fanatec Pitbox" to your application launcher
 ```
+
+From the command line (no window): `fanatec-pitbox --list` shows the setups, and
+`fanatec-pitbox --setup 3 [game command]` makes SETUP 3 active (a setup name you gave it in the app works too), then
+runs the game command if one is given.
 
 ## Tested hardware
 

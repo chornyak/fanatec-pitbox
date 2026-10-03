@@ -3,14 +3,16 @@ profiles (snapshots of all 5 setups) for backup and restore."""
 
 import errno
 import os
+import shlex
+import shutil
 import time
 from pathlib import Path
 from importlib import resources
 
 from PySide6.QtCore import Qt, QTimer, QUrl
-from PySide6.QtGui import QDesktopServices, QIcon, QPainter, QPixmap
+from PySide6.QtGui import QDesktopServices, QGuiApplication, QIcon, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
-from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QCheckBox, QDialog, QFrame, QGridLayout, QHBoxLayout,
+from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QButtonGroup, QCheckBox, QDialog, QFrame, QGridLayout, QHBoxLayout,
                                QInputDialog, QLabel, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
                                QPushButton, QScrollArea, QStackedWidget, QVBoxLayout, QWidget)
 
@@ -20,7 +22,9 @@ from .device import UeventWatcher, WheelBase, find_wheel_bases, open_tuning_link
 from .params import STANDARD_KEYS, find_model, models_for, params_for
 from .input_view import InputPage
 from .inputs import InputReader, find_event_device
-from .baseline_ui import BaselinePicker, FirstRunDialog, ModelCombo
+from .baseline_ui import ModelCombo
+from .checks import run_checks
+from .wizard import BaselineDialog, FirstRunDialog, SystemCheckDialog, status_icon
 from .baselines import available as baselines_available
 from .widgets import ParamControl, SlotCard
 
@@ -67,7 +71,8 @@ class MainWindow(QMainWindow):
         self.busy: str | None = None     # label of a running multi-step operation
         self._asked_base = False         # asked the base to report its settings (once per connection)
         self._first_run_pending = False
-        self._slot_titles_key = None
+        self._started = time.monotonic()
+        self._steam_setup_chosen = False
         self._op = None
         self.state = store.State()
         self.profiles: list[store.Profile] = []
@@ -149,6 +154,8 @@ class MainWindow(QMainWindow):
 
     def _show_tab(self, index: int):
         self.pages.setCurrentIndex(index)
+        if index == 2:
+            self._recheck_system()
         self._sync_input_reader()
 
     def _sync_input_reader(self):
@@ -269,43 +276,56 @@ class MainWindow(QMainWindow):
         profiles = self._build_profiles_panel()
         profiles.setMinimumHeight(380)
         outer.addWidget(profiles)
-        outer.addWidget(self._build_baseline_panel())
+        outer.addWidget(self._build_steam_panel())
         outer.addStretch(1)
         scroll.setWidget(page)
         return scroll
 
-    def _build_baseline_panel(self):
+    def _recheck_system(self):
+        """Refresh the system check mark in the Wheel base & system box."""
+        status_icon(self.check_mark, run_checks(self.base))
+
+    def _open_system_check(self):
+        dlg = SystemCheckDialog(lambda: run_checks(self.base), self)
+        dlg.finished.connect(lambda _r: (self._recheck_system(), dlg.deleteLater()))
+        self.system_check_dialog = dlg
+        dlg.open()
+
+    def _build_steam_panel(self):
         frame = QFrame(objectName="panel")
-        self.baseline_layout = QVBoxLayout(frame)
-        self.baseline_layout.setContentsMargins(24, 16, 24, 18)
-        self.baseline_layout.setSpacing(10)
-        self.baseline_layout.addWidget(QLabel("RECOMMENDED BASELINE", objectName="panelTitle"))
-        self.baseline_hint = QLabel(
-            "Fanatec's recommended starting settings for your wheel base: a good baseline for a setup to fine-tune "
-            "from. All setups are backed up before it is applied.",
-            objectName="dim", wordWrap=True)
-        self.baseline_layout.addWidget(self.baseline_hint)
-        self.baseline_picker = None
+        v = QVBoxLayout(frame)
+        v.setContentsMargins(24, 16, 24, 18)
+        v.setSpacing(10)
+        v.addWidget(QLabel("STEAM LAUNCH OPTIONS", objectName="panelTitle"))
+        v.addWidget(QLabel(
+            "Switch the wheel base to a setup when a game starts: in Steam, open the game's Properties → General "
+            "→ Launch Options and paste the line for the setup you want. If the wheel base isn't connected, the "
+            "game still starts.", objectName="dim", wordWrap=True))
+        launcher = Path(__file__).resolve().parent.parent / "fanatec-pitbox"
+        self.steam_exe = str(launcher) if launcher.exists() else (shutil.which("fanatec-pitbox") or "fanatec-pitbox")
         row = QHBoxLayout()
+        row.setSpacing(12)
+        self.steam_setup = QComboBox()
+        for n in store.SLOTS:
+            self.steam_setup.addItem(f"SETUP {n}", n)
+        self.steam_cmd = QLabel(objectName="fixCommand", textInteractionFlags=Qt.TextSelectableByMouse)
+        self.steam_copy = _button("Copy")
+        self.steam_copy.setObjectName("small")
+        self.steam_copy.clicked.connect(lambda: (QGuiApplication.clipboard().setText(self.steam_cmd.text()),
+                                                 self.steam_copy.setText("Copied")))
+        self.steam_setup.currentIndexChanged.connect(lambda _i: self._update_steam_line())
+        row.addWidget(self.steam_setup)
+        row.addWidget(self.steam_cmd)
+        row.addWidget(self.steam_copy)
         row.addStretch(1)
-        self.baseline_btn = _button("APPLY BASELINE", accent=True)
-        self.baseline_btn.clicked.connect(self._apply_baseline_from_settings)
-        row.addWidget(self.baseline_btn)
-        self.baseline_layout.addLayout(row)
-        self.baseline_panel = frame
+        v.addLayout(row)
+        self._update_steam_line()
         return frame
 
-    def _rebuild_baseline_picker(self):
-        if self.baseline_picker:
-            self.baseline_picker.setParent(None)
-            self.baseline_picker.deleteLater()
-            self.baseline_picker = None
-        self._slot_titles_key = None
-        if self.base and baselines_available(models_for(self.base.product)):
-            self.baseline_picker = BaselinePicker(self.params, self._known_values)
-            self.baseline_picker.values_needed.connect(lambda _slot: self._read_unknown_setups())
-            self.baseline_layout.insertWidget(2, self.baseline_picker)
-        self.baseline_panel.setVisible(self.baseline_picker is not None)
+    def _update_steam_line(self):
+        n = self.steam_setup.currentData() or 1
+        self.steam_cmd.setText(f"{shlex.quote(self.steam_exe)} --setup {n} %command%")
+        self.steam_copy.setText("Copy")
 
     def _build_info_panel(self):
         frame = QFrame(objectName="panel")
@@ -328,6 +348,23 @@ class MainWindow(QMainWindow):
         self.info_grid.setColumnStretch(3, 1)
         self.model_choice = None  # ModelCombo when several models share the USB id
         v.addLayout(self.info_grid)
+        check_row = QHBoxLayout()
+        check_row.setSpacing(14)
+        check_btn = _button("SYSTEM CHECK…")
+        check_btn.setToolTip("Check the driver, wheel base, permissions and deadzone, with fixes for anything missing.")
+        check_btn.clicked.connect(self._open_system_check)
+        self.check_mark = QLabel(alignment=Qt.AlignCenter, objectName="checkMark")
+        self.check_mark.setFixedSize(26, 26)
+        check_row.addWidget(self.check_mark)
+        check_row.addWidget(check_btn)
+        check_row.addSpacing(10)
+        self.baseline_btn = _button("RECOMMENDED BASELINE…")
+        self.baseline_btn.setToolTip("Apply Fanatec's recommended starting settings to a setup.")
+        self.baseline_btn.clicked.connect(self._open_baseline)
+        check_row.addWidget(self.baseline_btn)
+        check_row.addStretch(1)
+        v.addSpacing(4)
+        v.addLayout(check_row)
         return frame
 
     def _rebuild_model_choice(self):
@@ -460,8 +497,9 @@ class MainWindow(QMainWindow):
             if not ctl.interacting():
                 ctl.set_value(self.draft.get(key, live.get(key)))
             ctl.set_dirty(key in self.draft)
-        if self.baseline_picker and self.baseline_picker.isVisible():
-            self.baseline_picker.refresh()
+        dlg = getattr(self, "baseline_dialog", None)
+        if dlg is not None and dlg.isVisible():
+            dlg.picker.refresh()
         if "SEN" in self.params:
             self.input_page.set_tuning(live.get("SEN"), self.params["SEN"].max, live.get("brF"))
         self._update_view()
@@ -480,7 +518,6 @@ class MainWindow(QMainWindow):
         self.live = {}
         self.params = params_for(base.product) if base else {}
         self._build_controls()
-        self._rebuild_baseline_picker()
         self._rebuild_model_choice()
         if base:
             self.refresh()
@@ -612,20 +649,18 @@ class MainWindow(QMainWindow):
         self.write_btn.setText(f"WRITE TO WHEEL BASE ({n})" if n else "WRITE TO WHEEL BASE")
         self.draft_lbl.setText(f"{n} unwritten change{'s' if n != 1 else ''}" if n else "")
 
-        # recommended baselines (settings page)
-        if self.baseline_picker:
-            self.baseline_picker.set_model(self.model())
-            titles = {n: self._slot_title(n) for n in store.SLOTS}
-            key = (tuple(titles.items()), slot)
-            if key != self._slot_titles_key:
-                self._slot_titles_key = key
-                self.baseline_picker.set_slots(titles, slot)
-            self.baseline_btn.setEnabled(ready and adv and idle and self.baseline_picker.baseline() is not None)
-            self.baseline_picker.current_box.setText(
-                f"Make this my current setup (recommended): {self._slot_title(slot)}" if slot
-                else "Make this my current setup (recommended)")
-        if (self.baseline_picker and ready and adv and idle and not self.state.onboarded
-                and not self._first_run_pending):
+        for i, n in enumerate(store.SLOTS):  # setup names in the Steam drop-down
+            self.steam_setup.setItemText(i, self._slot_title(n))
+        if slot and not self._steam_setup_chosen:
+            self._steam_setup_chosen = True  # start on the active setup, then leave the choice to the user
+            self.steam_setup.setCurrentIndex(slot - 1)
+
+        self.baseline_btn.setEnabled(ready and adv and idle and b is not None
+                                     and baselines_available(models_for(b.product)))
+        # first start: show the welcome wizard once the base has reported (or straight away without one;
+        # its system check is most useful exactly when something is missing)
+        if (not self.state.onboarded and not self._first_run_pending and idle
+                and (ready or not b or time.monotonic() - self._started > 4)):
             self._first_run_pending = True
             QTimer.singleShot(300, self._show_first_run)
 
@@ -892,19 +927,23 @@ class MainWindow(QMainWindow):
 
     # ==================================================================== recommended baselines
     def _show_first_run(self):
-        if self.state.onboarded or not self.base or not self.baseline_picker or self.busy or not self._advanced():
+        if self.state.onboarded or self.busy:
             self._first_run_pending = False
             return
+        base_steps = bool(self.base and self.live and self._advanced())
+        models = models_for(self.base.product) if self.base else ()
         slot = self.live.get("SLOT")
-        dlg = FirstRunDialog(models_for(self.base.product), self.model(), self.params, self._known_values,
-                             {n: self._slot_title(n) for n in store.SLOTS}, slot, self)
-        dlg.picker.current_box.setText(f"Make this my current setup (recommended): {self._slot_title(slot)}")
+        dlg = FirstRunDialog(lambda: run_checks(self.base), models, self.model(), self.params, self._known_values,
+                             {n: self._slot_title(n) for n in store.SLOTS}, slot, base_steps, self)
+        if slot:
+            dlg.picker.current_box.setText(f"Make this my current setup (recommended): {self._slot_title(slot)}")
         dlg.picker.values_needed.connect(lambda _slot: self._read_unknown_setups())
 
         def finished(result):
-            self.state.onboarded = True
-            self.state.save()
-            if dlg.chosen_model():
+            if dlg.base_steps:  # without a working wheel base the welcome comes back on the next start
+                self.state.onboarded = True
+                self.state.save()
+            if dlg.base_steps and dlg.chosen_model():
                 self._set_model(dlg.chosen_model())
                 if self.model_choice:
                     self.model_choice.blockSignals(True)
@@ -918,17 +957,31 @@ class MainWindow(QMainWindow):
         self.first_run_dialog = dlg
         dlg.open()
 
-    def _apply_baseline_from_settings(self):
-        p = self.baseline_picker
-        if not p or not p.baseline():
+    def _open_baseline(self):
+        if not self.base or self.busy:
             return
-        slot = p.target_slot()
-        ok = QMessageBox.question(
-            self, "Apply baseline",
-            f"Write Fanatec's recommended baseline for the {p.baseline().base} to {self._slot_title(slot)}?\n\n"
-            "All setups are backed up as an auto-backup profile first.")
-        if ok == QMessageBox.Yes:
-            self._apply_baseline(p.baseline(), slot)
+        slot = self.live.get("SLOT")
+        dlg = BaselineDialog(models_for(self.base.product), self.model(), self.params, self._known_values,
+                             {n: self._slot_title(n) for n in store.SLOTS}, slot, self)
+        if slot:
+            dlg.picker.current_box.setText(f"Make this my current setup (recommended): {self._slot_title(slot)}")
+        dlg.picker.values_needed.connect(lambda _slot: self._read_unknown_setups())
+
+        def finished(result):
+            if result == QDialog.Accepted:
+                if dlg.chosen_model():
+                    self._set_model(dlg.chosen_model())
+                    if self.model_choice:
+                        self.model_choice.blockSignals(True)
+                        self.model_choice.setCurrentIndex(self.model_choice.findText(dlg.chosen_model().label))
+                        self.model_choice.blockSignals(False)
+                if dlg.picker.baseline():
+                    self._apply_baseline(dlg.picker.baseline(), dlg.picker.target_slot())
+            dlg.deleteLater()
+
+        dlg.finished.connect(finished)
+        self.baseline_dialog = dlg
+        dlg.open()
 
     def _read_unknown_setups(self):
         """Read all 5 setups (as Save setups does) when a setup's values are still unknown, so the
@@ -938,7 +991,8 @@ class MainWindow(QMainWindow):
             return
 
         def done(_slots):
-            for picker in (self.baseline_picker, getattr(getattr(self, "first_run_dialog", None), "picker", None)):
+            for dlg in (getattr(self, "baseline_dialog", None), getattr(self, "first_run_dialog", None)):
+                picker = getattr(dlg, "picker", None) if dlg is not None else None
                 if picker is not None:
                     try:
                         picker.refresh()
