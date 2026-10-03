@@ -9,24 +9,25 @@ import time
 from pathlib import Path
 from importlib import resources
 
-from PySide6.QtCore import Qt, QTimer, QUrl
-from PySide6.QtGui import QDesktopServices, QGuiApplication, QIcon, QPainter, QPixmap
+from PySide6.QtCore import QDir, Qt, QTimer, QUrl
+from PySide6.QtGui import QDesktopServices, QFontDatabase, QGuiApplication, QIcon, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
-from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QButtonGroup, QCheckBox, QDialog, QFrame, QGridLayout, QHBoxLayout,
+from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QLineEdit, QMenu, QToolButton, QButtonGroup, QCheckBox, QDialog, QFrame, QGridLayout, QHBoxLayout,
                                QInputDialog, QLabel, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
                                QPushButton, QScrollArea, QStackedWidget, QVBoxLayout, QWidget)
 
 from . import __version__
 from . import profiles as store
 from .device import UeventWatcher, WheelBase, find_wheel_bases, open_tuning_link
-from .params import STANDARD_KEYS, find_model, models_for, params_for
+from .params import GROUPS, STANDARD_KEYS, find_model, models_for, params_for
 from .input_view import InputPage
 from .inputs import InputReader, find_event_device
 from .baseline_ui import ModelCombo
-from .checks import run_checks
-from .wizard import BaselineDialog, FirstRunDialog, SystemCheckDialog, status_icon
+from .checks import run_checks, summary as checks_summary
+from .settings_ui import BaseSetupRow, Disclosure, ProfileRow, meta, rule, section, setting_row, status_dot
+from .wizard import BaselineDialog, FirstRunDialog, ModelDialog, SystemCheckDialog
 from .baselines import available as baselines_available
-from .widgets import ParamControl, SlotCard
+from .widgets import ParamControl, Segmented, SlotCard, repolish
 
 WRITE_GAP_MS = 30        # gap between individual value writes
 SETTLE_MS = 300          # wait after a setup switch so the driver holds the new setup's values
@@ -97,16 +98,17 @@ class MainWindow(QMainWindow):
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(0)
 
-        # full-width header: device name, loaded profile, tabs
-        header = QWidget()
+        # full-width header: base name and badge, three readouts, tabs (1a)
+        header = QWidget(objectName="appHeader")
+        header.setAttribute(Qt.WA_StyledBackground, True)
         hv = QVBoxLayout(header)
-        hv.setContentsMargins(32, 22, 32, 0)
-        hv.setSpacing(14)
+        hv.setContentsMargins(32, 20, 32, 0)
+        hv.setSpacing(16)
         top = QHBoxLayout()
         names = QVBoxLayout()
-        names.setSpacing(0)
-        self.series_lbl = QLabel(objectName="series")
-        self.model_lbl = QLabel("NO WHEEL BASE", objectName="model")
+        names.setSpacing(2)
+        self.series_lbl = QLabel(objectName="overline")
+        self.model_lbl = QLabel("No wheel base", objectName="baseTitle")
         self.boost_tag = QLabel("BOOST KIT", objectName="boostTag")
         self.boost_tag.hide()
         model_row = QHBoxLayout()
@@ -118,28 +120,49 @@ class MainWindow(QMainWindow):
         names.addLayout(model_row)
         top.addLayout(names)
         top.addStretch(1)
-        self.loaded_lbl = QLabel(objectName="activeProfile")
-        self.loaded_lbl.setAlignment(Qt.AlignRight | Qt.AlignTop)
-        self.loaded_lbl.setTextFormat(Qt.RichText)
-        top.addWidget(self.loaded_lbl, 0, Qt.AlignTop)
+        readouts = QHBoxLayout()
+        readouts.setSpacing(28)
+        self.base_dot = QLabel(objectName="statusDot")
+        self.base_dot.setFixedSize(7, 7)
+        self.ro_base, self.ro_setup, self.ro_profile = (QLabel(objectName="readoutValue") for _ in range(3))
+        for label, value, dot in (("WHEEL BASE", self.ro_base, self.base_dot), ("ACTIVE SETUP", self.ro_setup, None),
+                                  ("PROFILE", self.ro_profile, None)):
+            col = QVBoxLayout()
+            col.setSpacing(4)
+            col.addWidget(QLabel(label, objectName="readoutLabel"), 0, Qt.AlignRight)
+            row = QHBoxLayout()
+            row.setSpacing(7)
+            row.addStretch(1)
+            if dot is not None:
+                row.addWidget(dot, 0, Qt.AlignVCenter)
+            row.addWidget(value)
+            col.addLayout(row)
+            col.addStretch(1)  # label and value stay together at the top, level with the overline
+            readouts.addLayout(col)
+        top.addLayout(readouts)
         hv.addLayout(top)
         tabs = QHBoxLayout()
         tabs.setSpacing(28)
         self.tab_group = QButtonGroup(self)
-        for i, text in enumerate(("TUNING", "INPUT TEST", "SETTINGS")):
-            t = QPushButton(text, objectName="tab", checkable=True)
-            t.setCursor(Qt.PointingHandCursor)
-            self.tab_group.addButton(t, i)
-            tabs.addWidget(t)
+        for i, text in enumerate(("Tuning", "Input test", "Settings")):
+            tab = QPushButton(text, objectName="tab", checkable=True)
+            tab.setCursor(Qt.PointingHandCursor)
+            self.tab_group.addButton(tab, i)
+            tabs.addWidget(tab)
         self.tab_group.button(0).setChecked(True)
         tabs.addStretch(1)
         hv.addLayout(tabs)
-        hv.addWidget(_rule())
+        v.addWidget(header)
+
+        banner_box = QWidget()
+        bl = QVBoxLayout(banner_box)
+        bl.setContentsMargins(32, 14, 32, 0)
         self.banner = QLabel(objectName="banner", wordWrap=True)
         self.banner.setTextFormat(Qt.RichText)
-        self.banner.hide()
-        hv.addWidget(self.banner)
-        v.addWidget(header)
+        bl.addWidget(self.banner)
+        self.banner_box = banner_box
+        banner_box.hide()
+        v.addWidget(banner_box)
 
         self.pages = QStackedWidget()
         self.reader = InputReader(parent=self)
@@ -150,7 +173,10 @@ class MainWindow(QMainWindow):
         self.tab_group.idClicked.connect(self._show_tab)
         v.addWidget(self.pages, 1)
 
-        self.statusBar().setSizeGripEnabled(False)  # transient messages only
+        sb = self.statusBar()
+        sb.setSizeGripEnabled(False)  # transient messages only, and only shown while there is one
+        sb.messageChanged.connect(lambda msg: sb.setVisible(bool(msg)))
+        sb.hide()
 
     def _show_tab(self, index: int):
         self.pages.setCurrentIndex(index)
@@ -173,15 +199,15 @@ class MainWindow(QMainWindow):
 
     def _build_sidebar(self):
         side = QWidget(objectName="sidebar")
-        side.setFixedWidth(296)
+        side.setFixedWidth(272)
         v = QVBoxLayout(side)
-        v.setContentsMargins(32, 18, 16, 16)  # left edge lines up with the header
-        v.setSpacing(10)
-        self.side_title = QLabel(objectName="sideTitle")
+        v.setContentsMargins(32, 30, 16, 16)  # left edge lines up with the header
+        v.setSpacing(6)
+        self.side_title = QLabel(objectName="sectionLabel")
         self.side_text = QLabel(objectName="dim", wordWrap=True)
         v.addWidget(self.side_title)
         v.addWidget(self.side_text)
-        v.addSpacing(6)
+        v.addSpacing(14)
         self.slot_cards: dict[int, SlotCard] = {}
         for n in store.SLOTS:
             card = SlotCard(n)
@@ -196,58 +222,95 @@ class MainWindow(QMainWindow):
 
     def _build_tuning_page(self):
         page = QWidget()
-        h = QHBoxLayout(page)
-        h.setContentsMargins(0, 0, 0, 0)
-        h.setSpacing(0)
-        h.addWidget(self._build_sidebar())
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(0)
+        outer.addLayout(body, 1)
+        body.addWidget(self._build_sidebar())
         content = QWidget()
-        h.addWidget(content, 1)
+        body.addWidget(content, 1)
         v = QVBoxLayout(content)
-        v.setContentsMargins(28, 18, 32, 18)
-        v.setSpacing(14)
+        v.setContentsMargins(16, 26, 24, 0)
+        v.setSpacing(18)
 
-        bar = QHBoxLayout()
-        bar.setSpacing(18)
-        bar.addWidget(QLabel("Tuning Mode:"))
-        self.mode_toggle = QCheckBox("Advanced", objectName="modeToggle")
-        self.mode_toggle.setCursor(Qt.PointingHandCursor)
-        self.mode_toggle.setToolTip("Standard / Advanced tuning menu mode of the wheel base.\n"
-                                    "Switching modes can overwrite setups, so all setups are backed up first.")
-        self.mode_toggle.clicked.connect(self._change_mode)
-        bar.addWidget(self.mode_toggle)
-        bar.addSpacing(8)
-        self.reset_btn = _button("RESET  ⟳", accent=True)
-        self.reset_btn.setToolTip("Reset the wheel base's tuning setups to factory defaults.")
-        self.reset_btn.clicked.connect(self._reset)
-        bar.addWidget(self.reset_btn)
-        bar.addStretch(1)
-        self.draft_lbl = QLabel(objectName="draftNote")
-        bar.addWidget(self.draft_lbl)
-        self.revert_btn = _button("REVERT")
-        self.revert_btn.setToolTip("Discard changes that have not been written to the wheel base.")
-        self.revert_btn.clicked.connect(self._revert_draft)
-        bar.addWidget(self.revert_btn)
-        self.write_btn = _button("WRITE TO WHEEL BASE", accent=True)
-        self.write_btn.setToolTip("Send the highlighted changes to the active setup on the wheel base.")
-        self.write_btn.clicked.connect(self._write_draft)
-        bar.addWidget(self.write_btn)
-        v.addLayout(bar)
+        # heading: which setup is being edited; tuning mode and setup tools on the right
+        head = QHBoxLayout()
+        head.setContentsMargins(0, 0, 8, 0)
+        heading = QVBoxLayout()
+        heading.setSpacing(2)
+        heading.addWidget(QLabel("EDITING", objectName="overline"))
+        self.editing_lbl = QLabel(objectName="editingName")
+        heading.addWidget(self.editing_lbl)
+        head.addLayout(heading)
+        head.addStretch(1)
+        head.addWidget(QLabel("Tuning mode", objectName="toolbarLabel"))
+        head.addSpacing(10)
+        self.mode_seg = Segmented(((0, "Standard"), (1, "Advanced")))
+        self.mode_seg.setToolTip("Standard / Advanced tuning menu mode of the wheel base.\n"
+                                 "Switching modes can overwrite setups, so all setups are backed up first.")
+        self.mode_seg.clicked.connect(lambda value: self._change_mode(bool(value)))
+        head.addWidget(self.mode_seg)
+        head.addSpacing(20)
+        self.tools_btn = QToolButton(objectName="menuButton", text="Setup tools   ▾")
+        self.tools_btn.setCursor(Qt.PointingHandCursor)
+        self.tools_btn.setPopupMode(QToolButton.InstantPopup)
+        self.tools_btn.setFixedHeight(32)  # level with the Standard | Advanced control
+        tools = QMenu(self.tools_btn)
+        self.baseline_action = tools.addAction("Recommended baseline…", self._open_baseline)
+        self.reset_action = tools.addAction("Reset to factory defaults…", self._reset)
+        self.tools_btn.setMenu(tools)
+        head.addWidget(self.tools_btn)
+        v.addLayout(head)
 
+        # settings in panels grouped by meaning, two columns
         scroll = QScrollArea(widgetResizable=True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         holder = QWidget(objectName="scrollHolder")
-        hv = QVBoxLayout(holder)
-        hv.setContentsMargins(0, 0, 8, 0)
-        hv.setSpacing(14)
-        self.tuning_panel, self.tuning_grid = self._panel(None)
-        self.editing_lbl = QLabel(objectName="panelTitle")
-        self.tuning_panel.layout().insertWidget(0, self.editing_lbl)
-        self.other_panel, self.other_grid = self._panel("RIM & PEDALS")
-        hv.addWidget(self.tuning_panel)
-        hv.addWidget(self.other_panel)
-        hv.addStretch(1)
+        cols = QHBoxLayout(holder)
+        cols.setContentsMargins(0, 0, 8, 24)
+        cols.setSpacing(16)
+        self.group_panels = {}
+        for column in GROUPS:
+            col = QVBoxLayout()
+            col.setSpacing(16)
+            for key, title in column:
+                frame = QFrame(objectName="panel")
+                lay = QVBoxLayout(frame)
+                lay.setContentsMargins(20, 20, 20, 22)
+                lay.setSpacing(16)
+                lay.addWidget(QLabel(title, objectName="groupTitle"))
+                self.group_panels[key] = (frame, lay)
+                col.addWidget(frame)
+            col.addStretch(1)
+            cols.addLayout(col, 1)
         scroll.setWidget(holder)
         v.addWidget(scroll, 1)
+
+        # unwritten changes: only shown while there are any
+        self.dirty_bar = QFrame(objectName="dirtyBar")
+        bar = QHBoxLayout(self.dirty_bar)
+        bar.setContentsMargins(32, 12, 32, 12)
+        bar.setSpacing(10)
+        dot = QLabel(objectName="dirtyDot")
+        dot.setFixedSize(7, 7)
+        bar.addWidget(dot)
+        self.draft_lbl = QLabel(objectName="draftNote")
+        bar.addWidget(self.draft_lbl)
+        bar.addStretch(1)
+        self.revert_btn = _button("Revert")
+        self.revert_btn.setToolTip("Discard changes that have not been written to the wheel base.")
+        self.revert_btn.clicked.connect(self._revert_draft)
+        bar.addWidget(self.revert_btn)
+        self.write_btn = _button("Write to wheel base")
+        self.write_btn.setProperty("primary", True)
+        self.write_btn.setToolTip("Send the highlighted changes to the active setup on the wheel base.")
+        self.write_btn.clicked.connect(self._write_draft)
+        bar.addWidget(self.write_btn)
+        self.dirty_bar.hide()
+        outer.addWidget(self.dirty_bar)
         return page
 
     def _panel(self, title):
@@ -266,24 +329,73 @@ class MainWindow(QMainWindow):
         return frame, grid
 
     def _build_settings_page(self):
+        """One page, four sections in a centred column: Wheel base, Profiles, Launch from Steam, About."""
         scroll = QScrollArea(widgetResizable=True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        page = QWidget(objectName="scrollHolder")
-        outer = QVBoxLayout(page)
-        outer.setContentsMargins(32, 18, 24, 18)
-        outer.setSpacing(14)
-        outer.addWidget(self._build_info_panel())  # foundational: what is connected, and how
-        profiles = self._build_profiles_panel()
-        profiles.setMinimumHeight(380)
-        outer.addWidget(profiles)
-        outer.addWidget(self._build_steam_panel())
-        outer.addStretch(1)
-        scroll.setWidget(page)
+        holder = QWidget(objectName="scrollHolder")
+        centre = QHBoxLayout(holder)
+        centre.setContentsMargins(32, 32, 32, 48)
+        column = QWidget()
+        column.setMaximumWidth(880)
+        centre.addStretch(1)
+        centre.addWidget(column, 100)
+        centre.addStretch(1)
+        v = QVBoxLayout(column)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(32)
+        v.addWidget(section("WHEEL BASE", self._build_base_panel()))
+        v.addWidget(section("PROFILES", self._build_profiles_panel()))
+        v.addWidget(section("LAUNCH FROM STEAM", self._build_steam_panel()))
+        v.addWidget(section("ABOUT", self._build_about_panel()))
+        v.addStretch(1)
+        scroll.setWidget(holder)
         return scroll
 
+    def _build_base_panel(self):
+        frame = QFrame(objectName="panel")
+        v = QVBoxLayout(frame)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(0)
+        right = QWidget()
+        rh = QHBoxLayout(right)
+        rh.setContentsMargins(0, 0, 0, 0)
+        rh.setSpacing(16)
+        self.model_value = QLabel(objectName="modelValue")
+        self.model_change_btn = _button("Change…")
+        self.model_change_btn.clicked.connect(self._change_model)
+        rh.addWidget(self.model_value)
+        rh.addWidget(self.model_change_btn)
+        v.addWidget(setting_row("Model", "Several bases share one USB id. Your choice sets the header and the "
+                                         "recommended baseline.", right))
+        v.addWidget(rule())
+        self.check_dot = status_dot()
+        self.check_btn = _button("Check")
+        self.check_btn.clicked.connect(self._open_system_check)
+        v.addWidget(setting_row("System check", "Driver, wheel base, permissions and axis deadzone, with the "
+                                                "command to fix anything missing.", self.check_btn, self.check_dot))
+        v.addWidget(rule())
+        footer = QWidget()
+        fh = QHBoxLayout(footer)
+        fh.setContentsMargins(20, 14, 20, 14)
+        fh.setSpacing(16)
+        self.info_values = {}
+        for name in ("Firmware", "Rim id", "Device"):
+            value = QLabel(objectName="metaMono", textInteractionFlags=Qt.TextSelectableByMouse)
+            self.info_values[name] = value
+            fh.addWidget(meta(name, value), 1)
+        v.addWidget(footer)
+        return frame
+
     def _recheck_system(self):
-        """Refresh the system check mark in the Wheel base & system box."""
-        status_icon(self.check_mark, run_checks(self.base))
+        """Status dot and Check button in Settings → Wheel base: Check is only offered when something is off,
+        and becomes the primary action when something fails."""
+        checks = run_checks(self.base)
+        fail = any(c.status == "fail" for c in checks)
+        warn = any(c.status == "warn" for c in checks)
+        repolish(self.check_dot, state="fail" if fail else "warn" if warn else "ok")
+        self.check_dot.setToolTip(checks_summary(checks))
+        self.check_btn.setEnabled(fail or warn)
+        repolish(self.check_btn, primary=fail)
 
     def _open_system_check(self):
         dlg = SystemCheckDialog(lambda: run_checks(self.base), self)
@@ -291,33 +403,145 @@ class MainWindow(QMainWindow):
         self.system_check_dialog = dlg
         dlg.open()
 
+    def _change_model(self):
+        if not self.base:
+            return
+        dlg = ModelDialog(models_for(self.base.product), self.model(), self)
+
+        def finished(result):
+            if result == QDialog.Accepted:
+                self._set_model(dlg.chosen_model())
+            dlg.deleteLater()
+
+        dlg.finished.connect(finished)
+        self.model_dialog = dlg
+        dlg.open()
+
+    def _build_profiles_panel(self):
+        frame = QFrame(objectName="panel")
+        split = QHBoxLayout(frame)
+        split.setContentsMargins(0, 0, 0, 0)
+        split.setSpacing(0)
+
+        # left: the setups on the wheel base
+        left = QWidget()
+        lv = QVBoxLayout(left)
+        lv.setContentsMargins(0, 16, 0, 18)
+        lv.setSpacing(0)
+        head = QVBoxLayout()
+        head.setContentsMargins(20, 0, 20, 12)
+        head.setSpacing(4)
+        head.addWidget(QLabel("ON THE WHEEL BASE", objectName="yellowLabel"))
+        head.addWidget(QLabel("The current setups loaded on the wheel base.", objectName="bodyMuted", wordWrap=True))
+        lv.addLayout(head)
+        rows = QVBoxLayout()
+        rows.setContentsMargins(12, 0, 12, 0)
+        rows.setSpacing(0)
+        self.base_setup_rows = {}
+        for n in store.SLOTS:
+            row = BaseSetupRow(n)
+            self.base_setup_rows[n] = row
+            rows.addWidget(row)
+        lv.addLayout(rows)
+        lv.addStretch(1)
+        self.differs_box = QWidget()
+        dv = QVBoxLayout(self.differs_box)
+        dv.setContentsMargins(20, 12, 20, 0)
+        dv.setSpacing(12)
+        dv.addWidget(rule())
+        dh = QHBoxLayout()
+        dh.setSpacing(8)
+        dot = QLabel(objectName="dirtyDot")
+        dot.setFixedSize(6, 6)
+        self.differs_lbl = QLabel(objectName="differsNote")
+        dh.addWidget(dot)
+        dh.addWidget(self.differs_lbl, 1)
+        dv.addLayout(dh)
+        lv.addWidget(self.differs_box)
+        split.addWidget(left, 100)
+
+        divider = QFrame(objectName="vrule")
+        divider.setFixedWidth(1)
+        split.addWidget(divider)
+
+        # right: profiles on this PC
+        right = QWidget()
+        rv = QVBoxLayout(right)
+        rv.setContentsMargins(0, 16, 0, 0)
+        rv.setSpacing(0)
+        head = QVBoxLayout()
+        head.setContentsMargins(20, 0, 20, 12)
+        head.setSpacing(4)
+        head.addWidget(QLabel("ON THIS PC", objectName="yellowLabel"))
+        helper_row = QHBoxLayout()
+        helper_row.setSpacing(16)
+        helper_row.addWidget(QLabel("Saved copies of all 5 setups. Loading one replaces the base's setups, after an "
+                                    "automatic backup.", objectName="bodyMuted", wordWrap=True), 1)
+        self.save_new_btn = QPushButton("+", objectName="addButton")
+        self.save_new_btn.setFixedSize(30, 30)
+        self.save_new_btn.setCursor(Qt.PointingHandCursor)
+        self.save_new_btn.setToolTip("Save the 5 setups on the wheel base as a new profile")
+        self.save_new_btn.clicked.connect(self._save_new_profile)
+        helper_row.addWidget(self.save_new_btn, 0, Qt.AlignVCenter)
+        head.addLayout(helper_row)
+        rv.addLayout(head)
+        self.profile_rows_box = QVBoxLayout()
+        self.profile_rows_box.setContentsMargins(12, 0, 12, 0)
+        self.profile_rows_box.setSpacing(2)
+        rv.addLayout(self.profile_rows_box)
+        self.no_profiles = QLabel("No profiles yet. Save the setups on the wheel base to keep a copy here.",
+                                  objectName="dim", wordWrap=True)
+        self.no_profiles.setContentsMargins(20, 4, 20, 4)
+        rv.addWidget(self.no_profiles)
+        rv.addStretch(1)
+        self.backups_box = QWidget()
+        backups = QVBoxLayout(self.backups_box)
+        backups.setContentsMargins(20, 12, 20, 18)
+        backups.setSpacing(12)
+        backups.addWidget(rule())
+        self.backups_header = Disclosure("Automatic backups", f"Last {AUTO_BACKUPS_KEPT} kept")
+        self.backups_header.toggled.connect(lambda _on: self._reload_profiles())
+        backups.addWidget(self.backups_header)
+        rv.addWidget(self.backups_box)
+        self.backup_rows_box = QVBoxLayout()
+        self.backup_rows_box.setContentsMargins(12, 0, 12, 12)
+        self.backup_rows_box.setSpacing(2)
+        rv.addLayout(self.backup_rows_box)
+        split.addWidget(right, 125)
+        self.profile_rows = {}
+        self.selected_profile = None
+        return frame
+
     def _build_steam_panel(self):
         frame = QFrame(objectName="panel")
         v = QVBoxLayout(frame)
-        v.setContentsMargins(24, 16, 24, 18)
-        v.setSpacing(10)
-        v.addWidget(QLabel("STEAM LAUNCH OPTIONS", objectName="panelTitle"))
-        v.addWidget(QLabel(
-            "Switch the wheel base to a setup when a game starts: in Steam, open the game's Properties → General "
-            "→ Launch Options and paste the line for the setup you want. If the wheel base isn't connected, the "
-            "game still starts.", objectName="dim", wordWrap=True))
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(0)
+        text = QLabel("Switch the base to a setup when a game starts. In Steam open the game's "
+                      "<span style='color:#e8e8e9'>Properties → General → Launch Options</span> and paste the "
+                      "line. If the base isn't connected, the game still starts.",
+                      objectName="bodyMuted", wordWrap=True)
+        text.setTextFormat(Qt.RichText)
+        text.setContentsMargins(20, 14, 20, 14)
+        v.addWidget(text)
+        v.addWidget(rule())
         launcher = Path(__file__).resolve().parent.parent / "fanatec-pitbox"
         self.steam_exe = str(launcher) if launcher.exists() else (shutil.which("fanatec-pitbox") or "fanatec-pitbox")
         row = QHBoxLayout()
+        row.setContentsMargins(20, 14, 20, 14)
         row.setSpacing(12)
         self.steam_setup = QComboBox()
+        self.steam_setup.setFixedWidth(200)
         for n in store.SLOTS:
-            self.steam_setup.addItem(f"SETUP {n}", n)
-        self.steam_cmd = QLabel(objectName="fixCommand", textInteractionFlags=Qt.TextSelectableByMouse)
+            self.steam_setup.addItem(f"Setup {n}", n)
+        self.steam_cmd = QLineEdit(objectName="codeField", readOnly=True)
         self.steam_copy = _button("Copy")
-        self.steam_copy.setObjectName("small")
         self.steam_copy.clicked.connect(lambda: (QGuiApplication.clipboard().setText(self.steam_cmd.text()),
                                                  self.steam_copy.setText("Copied")))
         self.steam_setup.currentIndexChanged.connect(lambda _i: self._update_steam_line())
         row.addWidget(self.steam_setup)
-        row.addWidget(self.steam_cmd)
+        row.addWidget(self.steam_cmd, 1)
         row.addWidget(self.steam_copy)
-        row.addStretch(1)
         v.addLayout(row)
         self._update_steam_line()
         return frame
@@ -325,60 +549,34 @@ class MainWindow(QMainWindow):
     def _update_steam_line(self):
         n = self.steam_setup.currentData() or 1
         self.steam_cmd.setText(f"{shlex.quote(self.steam_exe)} --setup {n} %command%")
+        self.steam_cmd.setCursorPosition(0)
         self.steam_copy.setText("Copy")
 
-    def _build_info_panel(self):
+    def _build_about_panel(self):
         frame = QFrame(objectName="panel")
         v = QVBoxLayout(frame)
-        v.setContentsMargins(24, 16, 24, 18)
-        v.setSpacing(10)
-        v.addWidget(QLabel("WHEEL BASE & SYSTEM", objectName="panelTitle"))
-        self.info_grid = QGridLayout()
-        self.info_grid.setHorizontalSpacing(28)
-        self.info_grid.setVerticalSpacing(6)
-        self.info_values: dict[str, QLabel] = {}
-        fields = ["Wheel base", "Device", "Firmware", "Rim id", "Updates", "Driver", "Kernel", "App", "Config"]
-        for i, name in enumerate(fields):
-            col = (i // 5) * 2
-            self.info_grid.addWidget(QLabel(name, objectName="dim"), i % 5, col)
-            val = QLabel(textInteractionFlags=Qt.TextSelectableByMouse)
-            self.info_values[name] = val
-            self.info_grid.addWidget(val, i % 5, col + 1)
-        self.info_grid.setColumnStretch(1, 1)
-        self.info_grid.setColumnStretch(3, 1)
-        self.model_choice = None  # ModelCombo when several models share the USB id
-        v.addLayout(self.info_grid)
-        check_row = QHBoxLayout()
-        check_row.setSpacing(14)
-        check_btn = _button("SYSTEM CHECK…")
-        check_btn.setToolTip("Check the driver, wheel base, permissions and deadzone, with fixes for anything missing.")
-        check_btn.clicked.connect(self._open_system_check)
-        self.check_mark = QLabel(alignment=Qt.AlignCenter, objectName="checkMark")
-        self.check_mark.setFixedSize(26, 26)
-        check_row.addWidget(self.check_mark)
-        check_row.addWidget(check_btn)
-        check_row.addSpacing(10)
-        self.baseline_btn = _button("RECOMMENDED BASELINE…")
-        self.baseline_btn.setToolTip("Apply Fanatec's recommended starting settings to a setup.")
-        self.baseline_btn.clicked.connect(self._open_baseline)
-        check_row.addWidget(self.baseline_btn)
-        check_row.addStretch(1)
-        v.addSpacing(4)
-        v.addLayout(check_row)
+        v.setContentsMargins(20, 14, 20, 14)
+        v.setSpacing(12)
+        grid = QHBoxLayout()
+        grid.setSpacing(16)
+        for name in ("App", "Driver", "Kernel", "Updates"):
+            value = QLabel(objectName="metaText", textInteractionFlags=Qt.TextSelectableByMouse)
+            self.info_values[name] = value
+            grid.addWidget(meta(name, value), 1)
+        v.addLayout(grid)
+        v.addWidget(rule())
+        row = QHBoxLayout()
+        row.setSpacing(12)
+        row.addWidget(QLabel("Config & profiles", objectName="metaLabel"))
+        self.info_values["Config"] = QLabel(objectName="metaMono", textInteractionFlags=Qt.TextSelectableByMouse)
+        row.addWidget(self.info_values["Config"])
+        row.addStretch(1)
+        folder = _button("Open folder")
+        folder.setObjectName("small")
+        folder.clicked.connect(self._open_folder)
+        row.addWidget(folder)
+        v.addLayout(row)
         return frame
-
-    def _rebuild_model_choice(self):
-        if self.model_choice:
-            self.model_choice.setParent(None)
-            self.model_choice.deleteLater()
-            self.model_choice = None
-        models = models_for(self.base.product) if self.base else ()
-        label = self.info_values["Wheel base"]
-        label.setVisible(len(models) <= 1)
-        if len(models) > 1:
-            self.model_choice = ModelCombo(models, self.model())
-            self.model_choice.currentIndexChanged.connect(lambda _i: self._set_model(self.model_choice.model()))
-            self.info_grid.addWidget(self.model_choice, 0, 1, Qt.AlignLeft)
 
     def model(self):
         """The user's wheel base model (asked once when several models share the USB id)."""
@@ -393,54 +591,8 @@ class MainWindow(QMainWindow):
         self.state.save()
         self._update_view()
 
-    def _build_profiles_panel(self):
-        page = QFrame(objectName="panel")
-        v = QVBoxLayout(page)
-        v.setContentsMargins(24, 18, 24, 20)
-        v.setSpacing(12)
-        v.addWidget(QLabel("PROFILES & BACKUP", objectName="panelTitle"))
-        v.addWidget(QLabel(
-            "A profile is a snapshot of all 5 setups and their names, saved on this PC. Use it to back up "
-            "your wheel base or to swap in a complete set. One profile is loaded at a time. Saving or loading "
-            "briefly switches through all 5 setups on the base, then returns to the setup you were on.",
-            objectName="dim", wordWrap=True))
-
-        row = QHBoxLayout()
-        row.setSpacing(20)
-        v.addLayout(row, 1)
-        self.profile_list = QListWidget()
-        self.profile_list.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.profile_list.itemSelectionChanged.connect(self._profile_selected)
-        self.profile_list.setMinimumWidth(320)
-        row.addWidget(self.profile_list, 2)
-        self.profile_detail = QLabel(objectName="profileDetail", wordWrap=True)
-        self.profile_detail.setTextFormat(Qt.RichText)
-        self.profile_detail.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-        row.addWidget(self.profile_detail, 3)
-
-        buttons = QHBoxLayout()
-        buttons.setSpacing(10)
-        self.save_new_btn = _button("SAVE SETUPS AS NEW PROFILE…", accent=True)
-        self.save_new_btn.clicked.connect(self._save_new_profile)
-        self.overwrite_btn = _button("Save setups to selected")
-        self.overwrite_btn.clicked.connect(self._overwrite_profile)
-        self.load_btn = _button("LOAD INTO WHEEL BASE", accent=True)
-        self.load_btn.clicked.connect(self._load_profile)
-        self.rename_btn = _button("Rename")
-        self.rename_btn.clicked.connect(self._rename_profile)
-        self.del_btn = _button("Delete", danger=True)
-        self.del_btn.clicked.connect(self._delete_profile)
-        folder = _button("Open folder")
-        folder.clicked.connect(self._open_folder)
-        for b in (self.save_new_btn, self.overwrite_btn, self.load_btn, self.rename_btn, self.del_btn):
-            buttons.addWidget(b)
-        buttons.addStretch(1)
-        buttons.addWidget(folder)
-        v.addLayout(buttons)
-        return page
-
     def _build_controls(self):
-        """(Re)create parameter controls for the parameters this base exposes."""
+        """(Re)create parameter controls for the parameters this base exposes, in their group panels."""
         for c in self.controls.values():
             c.setParent(None)
             c.deleteLater()
@@ -448,20 +600,13 @@ class MainWindow(QMainWindow):
         if not self.base:
             return
         available = set(self.base.keys())
-        rows = {"left": 0, "right": 0, "other": 0}
         for key, p in self.params.items():
             if key not in available:
                 continue
             ctl = ParamControl(p)
             ctl.edited.connect(self._user_edit)
             self.controls[key] = ctl
-            if p.section == "other":
-                i = rows["other"]
-                self.other_grid.addWidget(ctl, i // 2, i % 2)
-            else:
-                self.tuning_grid.addWidget(ctl, rows[p.section], 0 if p.section == "left" else 1, Qt.AlignTop)
-            rows[p.section] += 1
-        self.other_panel.setVisible(rows["other"] > 0)
+            self.group_panels[p.group][1].addWidget(ctl)
 
     # =============================================================================== device
     def refresh(self):
@@ -496,7 +641,7 @@ class MainWindow(QMainWindow):
         for key, ctl in self.controls.items():
             if not ctl.interacting():
                 ctl.set_value(self.draft.get(key, live.get(key)))
-            ctl.set_dirty(key in self.draft)
+            ctl.set_dirty(key in self.draft, live.get(key))
         dlg = getattr(self, "baseline_dialog", None)
         if dlg is not None and dlg.isVisible():
             dlg.picker.refresh()
@@ -518,7 +663,6 @@ class MainWindow(QMainWindow):
         self.live = {}
         self.params = params_for(base.product) if base else {}
         self._build_controls()
-        self._rebuild_model_choice()
         if base:
             self.refresh()
         self._sync_input_reader()
@@ -579,18 +723,17 @@ class MainWindow(QMainWindow):
                                         "  ·  choose your model in Settings")
                 self.model_lbl.setText(names[0].name)
             self.boost_tag.setVisible(bool(m and m.boost))
-            info = {"Wheel base": m.label if m else "",
-                    "Device": f"{b.name}  (USB {b.product:04X})",
-                    "Firmware": b.info("fw_version") or "?",
-                    "Rim id": b.info("wheel_id") or "?"}
+            info = {"Device": b.name, "Firmware": b.info("fw_version") or "?", "Rim id": b.info("wheel_id") or "?"}
         else:
             self.series_lbl.setText("")
-            self.model_lbl.setText("NO WHEEL BASE")
+            self.model_lbl.setText("No wheel base")
             self.boost_tag.hide()
-            info = {"Wheel base": "not connected", "Device": "—", "Firmware": "—", "Rim id": "—"}
-        info |= {"Updates": "live (kernel events)" if self.watcher.active else "polling every 1.5 s",
-                 "Driver": driver_version(), "Kernel": os.uname().release,
-                 "App": f"fanatec-pitbox {__version__}", "Config": str(store.CONFIG_DIR)}
+            info = {"Device": "—", "Firmware": "—", "Rim id": "—"}
+        home, config = str(Path.home()), str(store.CONFIG_DIR)
+        info |= {"Updates": "Live (kernel events)" if self.watcher.active else "Polling every 1.5 s",
+                 "Driver": f"hid-fanatecff {driver_version()}", "Kernel": os.uname().release,
+                 "App": f"fanatec-pitbox {__version__}",
+                 "Config": "~" + config[len(home):] if config.startswith(home + "/") else config}
         for k, text in info.items():
             self.info_values[k].setText(text)
 
@@ -617,9 +760,7 @@ class MainWindow(QMainWindow):
                 "BRF), as on the wheel's own tuning menu. Switch to Advanced for the 5 setups and all settings.")
         else:
             self.side_title.setText("SETUPS")
-            self.side_text.setText(
-                "Your wheel base stores 5 setups and runs the active one. Switch here, or from the wheel's "
-                "tuning menu (also in-game). Names are only shown in this app.")
+            self.side_text.setText("Stored on the wheel base. Click to make one active; double-click to rename.")
         for n, card in self.slot_cards.items():
             seen = self.state.seen.get(n)
             card.setVisible(not standard)
@@ -630,33 +771,34 @@ class MainWindow(QMainWindow):
             self.standard_card.update_card(None, self._summary(self.live), active=True, enabled=True)
 
         # tuning page
-        self.mode_toggle.setChecked(adv)
-        self.mode_toggle.setText("Advanced" if adv else "Standard")
-        self.mode_toggle.setEnabled(ready and idle)
-        self.reset_btn.setEnabled(ready and idle)
+        self.mode_seg.set_value(1 if adv else 0)
+        self.mode_seg.setEnabled(ready and idle)
+        self.tools_btn.setEnabled(ready and idle)
+        self.baseline_action.setEnabled(adv and b is not None and baselines_available(models_for(b.product)))
         for key, ctl in self.controls.items():
             ctl.setVisible(not standard or key in STANDARD_KEYS)
             ctl.setEnabled(ready and not standard and (key in self.live or key in self.draft))
-        self.other_panel.setVisible(any(not c.isHidden() for k, c in self.controls.items()
-                                        if self.params[k].section == "other"))
+        for key, (frame, _lay) in self.group_panels.items():
+            frame.setVisible(any(not c.isHidden() for k, c in self.controls.items() if self.params[k].group == key))
         if standard:
-            self.editing_lbl.setText("STANDARD SETUP  ·  READ-ONLY IN THIS APP — CHANGE THESE ON THE WHEEL")
+            self.editing_lbl.setText("Standard setup")
+            self.editing_lbl.setToolTip("Read-only in this app: change these on the wheel.")
         else:
-            self.editing_lbl.setText(f"EDITING  {self._slot_title(slot)}" if ready and slot else "")
+            self.editing_lbl.setText((self.state.aliases.get(slot) or f"Setup {slot}") if ready and slot else "—")
+            self.editing_lbl.setToolTip(f"SETUP {slot}" if slot else "")
         n = len(self.draft)
+        self.dirty_bar.setVisible(bool(n))
         self.write_btn.setEnabled(bool(n) and adv and idle)
         self.revert_btn.setEnabled(bool(n) and idle)
-        self.write_btn.setText(f"WRITE TO WHEEL BASE ({n})" if n else "WRITE TO WHEEL BASE")
         self.draft_lbl.setText(f"{n} unwritten change{'s' if n != 1 else ''}" if n else "")
 
         for i, n in enumerate(store.SLOTS):  # setup names in the Steam drop-down
-            self.steam_setup.setItemText(i, self._slot_title(n))
+            alias = self.state.aliases.get(n)
+            self.steam_setup.setItemText(i, f"Setup {n} · {alias}" if alias else f"Setup {n}")
         if slot and not self._steam_setup_chosen:
             self._steam_setup_chosen = True  # start on the active setup, then leave the choice to the user
             self.steam_setup.setCurrentIndex(slot - 1)
 
-        self.baseline_btn.setEnabled(ready and adv and idle and b is not None
-                                     and baselines_available(models_for(b.product)))
         # first start: show the welcome wizard once the base has reported (or straight away without one;
         # its system check is most useful exactly when something is missing)
         if (not self.state.onboarded and not self._first_run_pending and idle
@@ -664,32 +806,57 @@ class MainWindow(QMainWindow):
             self._first_run_pending = True
             QTimer.singleShot(300, self._show_first_run)
 
-        # profiles page
-        sel = self._selected() is not None
-        self.save_new_btn.setEnabled(ready and adv and idle)
-        self.overwrite_btn.setEnabled(sel and ready and adv and idle)
-        self.load_btn.setEnabled(sel and ready and adv and idle)
-        self.rename_btn.setEnabled(sel and idle)
-        self.del_btn.setEnabled(sel and idle)
-
+        # settings: wheel base model, setups on the base, profiles
+        m = self.model() if b else None
+        models = models_for(b.product) if b else ()
+        self.model_value.setText(m.label if m else ("Not chosen" if len(models) > 1 else "—"))
+        repolish(self.model_value, muted=m is None)
+        self.model_change_btn.setVisible(len(models) > 1)
+        for n, row in self.base_setup_rows.items():
+            row.update_row(self.state.aliases.get(n) or f"Setup {n}", self._summary(self.state.seen.get(n)),
+                           active=(n == slot and adv))
         prof = self._profile(self.state.loaded)
-        if self.busy:
-            self.loaded_lbl.setText(f"<span style='color:#f2e600'>{self.busy}…</span>")
-        elif prof:
-            changed = prof.differs(self.state.seen)
-            mark = (f"<span style='color:#f2e600'>  •  CHANGED: SETUP {', '.join(map(str, changed))}</span>"
-                    if changed else "")
-            self.loaded_lbl.setText(f"LOADED PROFILE:&nbsp; {prof.name}{mark}")
+        changed = prof.differs(self.state.seen) if prof else []
+        self.differs_box.setVisible(bool(changed))
+        if changed:
+            setups = "Setup " + changed[0].__str__() if len(changed) == 1 else "Setups " + ", ".join(map(str, changed))
+            self.differs_lbl.setText(f"{setups} {'differs' if len(changed) == 1 else 'differ'} from “{prof.name}”")
+        can_save = ready and adv and idle
+        self.save_new_btn.setEnabled(can_save)
+        for name, row in self.profile_rows.items():
+            p = self._profile(name)
+            if p:
+                row.update_row(p.saved, " · ".join(p.aliases.get(n) or f"Setup {n}" for n in sorted(p.slots)),
+                               loaded=name == self.state.loaded, selected=name == self.selected_profile,
+                               can_load=can_save)
+
+        # header readouts
+        state, text = ("ok", "Connected") if ready else ("warn", "Waiting…") if b else ("fail", "Not found")
+        if self.base_dot.property("state") != state:
+            self.base_dot.setProperty("state", state)
+            self.base_dot.style().unpolish(self.base_dot)
+            self.base_dot.style().polish(self.base_dot)
+        self.ro_base.setText(text)
+        if ready and not adv:
+            self.ro_setup.setText("Standard")
+        elif slot:
+            self.ro_setup.setText(self.state.aliases.get(slot) or f"Setup {slot}")
         else:
-            self.loaded_lbl.setText("LOADED PROFILE:&nbsp; <span style='color:#8a8d93'>none</span>")
+            self.ro_setup.setText("—")
+        prof = self._profile(self.state.loaded)
+        self.ro_profile.setText(prof.name if prof else "None")
+        changed = prof.differs(self.state.seen) if prof else []
+        self.ro_profile.setToolTip("" if not prof else
+                                   f"Setup {', '.join(map(str, changed))} differs from “{prof.name}”" if changed else
+                                   f"The wheel base matches “{prof.name}”")
 
     def _summary(self, values) -> str:
         if not values or "SEN" not in self.params:
             return ""
-        return f"{self.params['SEN'].fmt(values.get('SEN'))}  ·  FF {values.get('FF', '?')}%"
+        return f"{self.params['SEN'].fmt(values.get('SEN'))} · FF {values.get('FF', '?')}%"
 
     def _banner(self, html):
-        self.banner.setVisible(bool(html))
+        self.banner_box.setVisible(bool(html))
         if html:
             self.banner.setText(html)
 
@@ -803,7 +970,7 @@ class MainWindow(QMainWindow):
             self.draft.pop(key, None)
         else:
             self.draft[key] = value
-        self.controls[key].set_dirty(key in self.draft)
+        self.controls[key].set_dirty(key in self.draft, self.live.get(key))
         self._update_view()
 
     def _revert_draft(self):
@@ -869,7 +1036,7 @@ class MainWindow(QMainWindow):
         self._update_view()
 
     def _change_mode(self, advanced: bool):
-        self.mode_toggle.setChecked(not advanced)  # keep showing the device's state until it confirms
+        self.mode_seg.set_value(1 if self._advanced() else 0)  # keep showing the device's state until it confirms
         if not self.base or self.busy or not self._confirm_discard_draft("Changing the tuning mode"):
             return
         target = "Advanced" if advanced else "Standard"
@@ -934,9 +1101,7 @@ class MainWindow(QMainWindow):
         models = models_for(self.base.product) if self.base else ()
         slot = self.live.get("SLOT")
         dlg = FirstRunDialog(lambda: run_checks(self.base), models, self.model(), self.params, self._known_values,
-                             {n: self._slot_title(n) for n in store.SLOTS}, slot, base_steps, self)
-        if slot:
-            dlg.picker.current_box.setText(f"Make this my current setup (recommended): {self._slot_title(slot)}")
+                             {n: self.state.aliases.get(n) or f"Setup {n}" for n in store.SLOTS}, slot, base_steps, self)
         dlg.picker.values_needed.connect(lambda _slot: self._read_unknown_setups())
 
         def finished(result):
@@ -945,10 +1110,6 @@ class MainWindow(QMainWindow):
                 self.state.save()
             if dlg.base_steps and dlg.chosen_model():
                 self._set_model(dlg.chosen_model())
-                if self.model_choice:
-                    self.model_choice.blockSignals(True)
-                    self.model_choice.setCurrentIndex(self.model_choice.findText(dlg.chosen_model().label))
-                    self.model_choice.blockSignals(False)
             if result == QDialog.Accepted and dlg.use_baseline:
                 self._apply_baseline(dlg.picker.baseline(), dlg.picker.target_slot())
             dlg.deleteLater()
@@ -962,19 +1123,13 @@ class MainWindow(QMainWindow):
             return
         slot = self.live.get("SLOT")
         dlg = BaselineDialog(models_for(self.base.product), self.model(), self.params, self._known_values,
-                             {n: self._slot_title(n) for n in store.SLOTS}, slot, self)
-        if slot:
-            dlg.picker.current_box.setText(f"Make this my current setup (recommended): {self._slot_title(slot)}")
+                             {n: self.state.aliases.get(n) or f"Setup {n}" for n in store.SLOTS}, slot, self)
         dlg.picker.values_needed.connect(lambda _slot: self._read_unknown_setups())
 
         def finished(result):
             if result == QDialog.Accepted:
                 if dlg.chosen_model():
                     self._set_model(dlg.chosen_model())
-                    if self.model_choice:
-                        self.model_choice.blockSignals(True)
-                        self.model_choice.setCurrentIndex(self.model_choice.findText(dlg.chosen_model().label))
-                        self.model_choice.blockSignals(False)
                 if dlg.picker.baseline():
                     self._apply_baseline(dlg.picker.baseline(), dlg.picker.target_slot())
             dlg.deleteLater()
@@ -1041,45 +1196,48 @@ class MainWindow(QMainWindow):
 
     # ============================================================================= profiles
     def _reload_profiles(self, select: str | None = None):
-        current = select or (self._selected().name if self._selected() else self.state.loaded)
+        """Rebuild the profile rows (saved profiles, then automatic backups when expanded)."""
+        if select is not None:
+            self.selected_profile = select
         self.profiles = store.load_all()
-        self.profile_list.clear()
-        for p in self.profiles:
-            mark = "●  " if p.name == self.state.loaded else "    "
-            item = QListWidgetItem(f"{mark}{p.name}\n      saved {p.saved}")
-            item.setData(Qt.UserRole, p.name)
-            self.profile_list.addItem(item)
-            if p.name == current:
-                item.setSelected(True)
-                self.profile_list.setCurrentItem(item)
-        self._profile_selected()
+        if self._profile(self.selected_profile) is None:
+            self.selected_profile = None
+        for row in self.profile_rows.values():
+            row.setParent(None)
+            row.deleteLater()
+        self.profile_rows = {}
+        saved = sorted((p for p in self.profiles if not p.name.startswith(AUTO_BACKUP_PREFIX)),
+                       key=lambda p: (p.name != self.state.loaded, p.name.lower()))  # loaded one first
+        backups = sorted((p for p in self.profiles if p.name.startswith(AUTO_BACKUP_PREFIX)),
+                         key=lambda p: p.name, reverse=True)
+        for p in saved:
+            self.profile_rows_box.addWidget(self._profile_row(p))
+        self.no_profiles.setVisible(not saved)
+        self.backups_header.set_count(len(backups))
+        self.backups_box.setVisible(bool(backups))
+        if self.backups_header.open:
+            for p in backups:
+                self.backup_rows_box.addWidget(self._profile_row(p))
+        self._update_view()
+
+    def _profile_row(self, p):
+        row = ProfileRow(p.name)
+        row.selected.connect(self._select_profile)
+        row.load.connect(self._load_profile)
+        row.action.connect(self._profile_action)
+        self.profile_rows[p.name] = row
+        return row
+
+    def _select_profile(self, name):
+        self.selected_profile = None if name == self.selected_profile else name
+        self._update_view()
+
+    def _profile_action(self, name, verb):
+        {"rename": self._rename_profile, "duplicate": self._duplicate_profile,
+         "delete": self._delete_profile}[verb](name)
 
     def _profile(self, name):
         return next((p for p in self.profiles if p.name == name), None)
-
-    def _selected(self):
-        items = self.profile_list.selectedItems()
-        return self._profile(items[0].data(Qt.UserRole)) if items else None
-
-    def _profile_selected(self):
-        p = self._selected()
-        if not p:
-            self.profile_detail.setText("<span style='color:#8a8d93'>Select a profile to see its setups.</span>")
-        else:
-            rows = []
-            for n in store.SLOTS:
-                values = p.slots.get(n)
-                if values is None:
-                    continue
-                alias = p.aliases.get(n, "")
-                parts = [self.params[k].fmt(values[k]) if k in self.params else str(values[k])
-                         for k in ("SEN", "FF", "NDP") if k in values]
-                rows.append(f"<tr><td style='padding:4px 14px 4px 0'><b>SETUP {n}</b></td>"
-                            f"<td style='padding:4px 14px 4px 0'>{alias}</td>"
-                            f"<td style='color:#8a8d93'>{'  ·  '.join(parts)}</td></tr>")
-            self.profile_detail.setText(f"<p style='font-size:12pt'><b>{p.name}</b></p>"
-                                        f"<p style='color:#8a8d93'>saved {p.saved}</p><table>{''.join(rows)}</table>")
-        self._update_view()
 
     def _ask_name(self, title, default=""):
         name, ok = QInputDialog.getText(self, title, "Profile name:", text=default)
@@ -1111,15 +1269,8 @@ class MainWindow(QMainWindow):
         if name:
             self._save_setups(name, None)
 
-    def _overwrite_profile(self):
-        p = self._selected()
-        if p and QMessageBox.question(self, "Save setups",
-                                      f"Overwrite “{p.name}” with the 5 setups currently on the wheel base?"
-                                      ) == QMessageBox.Yes:
-            self._save_setups(p.name, p)
-
-    def _load_profile(self):
-        p = self._selected()
+    def _load_profile(self, name):
+        p = self._profile(name)
         if not p or not self.base or self.busy:
             return
         ok = QMessageBox.warning(
@@ -1160,22 +1311,31 @@ class MainWindow(QMainWindow):
 
         self._run(f"Loading “{p.name}”", op(), done)
 
-    def _rename_profile(self):
-        p = self._selected()
+    def _rename_profile(self, name):
+        p = self._profile(name)
         if not p:
             return
-        name = self._ask_name("Rename profile", p.name)
-        if not name or name == p.name:
+        new = self._ask_name("Rename profile", p.name)
+        if not new or new == p.name:
             return
         was_loaded = self.state.loaded == p.name
-        store.rename(p, name)
+        store.rename(p, new)
         if was_loaded:
-            self.state.loaded = name
+            self.state.loaded = new
             self.state.save()
-        self._reload_profiles(select=name)
+        self._reload_profiles(select=new if self.selected_profile == name else None)
 
-    def _delete_profile(self):
-        p = self._selected()
+    def _duplicate_profile(self, name):
+        p = self._profile(name)
+        if not p:
+            return
+        new = self._ask_name("Duplicate profile", f"{p.name} copy")
+        if new:
+            store.save(store.Profile(new, {n: dict(v) for n, v in p.slots.items()}, dict(p.aliases)))
+            self._reload_profiles(select=new)
+
+    def _delete_profile(self, name):
+        p = self._profile(name)
         if not p or QMessageBox.question(self, "Delete profile", f"Delete “{p.name}”?") != QMessageBox.Yes:
             return
         store.delete(p)
@@ -1217,5 +1377,15 @@ def app_icon() -> QIcon:
     return icon
 
 
+def load_fonts():
+    """Bundled Noto Sans / Noto Sans Mono (SIL OFL, see fonts/OFL.txt; built by tools/build_fonts.py), so every
+    weight the design uses exists on any system; many systems' Noto fonts lack SemiBold."""
+    fonts = resources.files(__package__).joinpath("fonts")
+    for entry in sorted(fonts.iterdir(), key=lambda e: e.name):
+        if entry.name.endswith(".ttf"):
+            QFontDatabase.addApplicationFont(str(entry))
+
+
 def load_stylesheet() -> str:
+    QDir.addSearchPath("icons", str(resources.files(__package__).joinpath("icons")))  # url(icons:…) in the QSS
     return resources.files(__package__).joinpath("style.qss").read_text()

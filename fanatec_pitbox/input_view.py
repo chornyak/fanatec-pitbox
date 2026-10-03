@@ -1,41 +1,54 @@
-"""INPUT TEST tab: live steering, pedals and shifter, modelled on the official app's 'Input feedback'."""
+"""Input test tab: live steering, pedals and shifter (design 1a)."""
 
-import math
 import time
+from importlib import resources
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen
-from PySide6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
+from PySide6.QtSvg import QSvgRenderer
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
 
 from .inputs import PEDALS, InputReader
 
 YELLOW = QColor("#f2e600")
 TEAL = QColor("#2bb8aa")
-TEAL_DARK = QColor("#1d6f69")
-TRACK = QColor("#24262b")
-TEXT = QColor("#e6e6e6")
-DIM = QColor("#8a8d93")
+GROOVE = QColor("#2e3035")
+PANEL = QColor("#17181b")
+TEXT = QColor("#e8e8e9")
+SECONDARY = QColor("#c9cacd")
+BODY_MUTED = QColor("#a9acb1")
+HELPER = QColor("#8a8d93")
+FAINT = QColor("#6c6f75")
+CONTROL = QColor("#3a3d42")
+LINE = QColor("#45484e")
 FLASH_S = 0.25
 PEAK_HOLD_S = 1.5
+MINUS = "−"
 
 
-def _font(size, bold=False, italic=False):
-    f = QFont()
-    f.setPointSizeF(size)
-    f.setBold(bold)
-    f.setItalic(italic)
+def _font(px: float, weight=QFont.Normal, spacing: float = 0.0):
+    f = QFont("Noto Sans")
+    f.setPixelSize(round(px)) if px == int(px) else f.setPointSizeF(px * 0.75)
+    f.setWeight(weight)
+    if spacing:
+        f.setLetterSpacing(QFont.AbsoluteSpacing, spacing)
     return f
 
 
+def _signed(deg: float) -> str:
+    return f"{MINUS if deg < -0.5 else '+' if deg > 0.5 else ''}{abs(deg):.0f}°"
+
+
 class WheelGraphic(QWidget):
-    """A steering wheel that rotates with the real one, plus angle readout and range strip."""
+    """The wheel silhouette turning with the real one, the angle, and where it is within the rotation range."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.position = None  # -1..1 of the rotation range
         self.range_deg = 1080
         self.auto = False
-        self.setMinimumSize(360, 380)
+        self.svg = QSvgRenderer(str(resources.files(__package__).joinpath("icons/wheel.svg")))
+        self.setMinimumSize(320, 420)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
     def set_state(self, position, range_deg, auto):
@@ -50,68 +63,62 @@ class WheelGraphic(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         w, h = self.width(), self.height()
-        strip_h = 86
-        size = min(w, h - strip_h) * 0.86
-        cx, cy = w / 2, (h - strip_h) / 2
-        angle = self.angle or 0.0
+        below = 40 + 12 + 16 + 12 + 16  # angle, gap, strip, gap, caption
+        size = max(120, min(380, w, h - below - 28))
+        top = (h - below - size - 8) / 2 + 20
+        cx, cy = w / 2, top + size / 2
 
         p.save()
         p.translate(cx, cy)
-        p.rotate(angle)
-        r = size / 2
-        rim = max(10.0, size * 0.075)
-        # spokes and hub
-        p.setPen(QPen(QColor("#3a3d42"), rim * 0.9, Qt.SolidLine, Qt.RoundCap))
-        for a in (180, 0, 90):  # left, right, bottom
-            rad = math.radians(a)
-            p.drawLine(QPointF(0, 0), QPointF(math.cos(rad) * (r - rim / 2), math.sin(rad) * (r - rim / 2)))
-        p.setPen(Qt.NoPen)
-        p.setBrush(QColor("#2a2c31"))
-        p.drawEllipse(QPointF(0, 0), r * 0.24, r * 0.24)
-        p.setBrush(QColor("#1b1c20"))
-        p.drawEllipse(QPointF(0, 0), r * 0.16, r * 0.16)
-        # rim
-        p.setBrush(Qt.NoBrush)
-        p.setPen(QPen(QColor("#2f3237"), rim))
-        p.drawEllipse(QPointF(0, 0), r - rim / 2, r - rim / 2)
-        p.setPen(QPen(QColor("#45484e"), 2))
-        p.drawEllipse(QPointF(0, 0), r - 1, r - 1)
-        p.drawEllipse(QPointF(0, 0), r - rim, r - rim)
-        # top-centre marker
-        p.setPen(Qt.NoPen)
-        p.setBrush(YELLOW)
-        p.drawRoundedRect(QRectF(-rim * 0.35, -r, rim * 0.7, rim), 2, 2)
+        p.rotate(self.angle or 0.0)
+        p.setOpacity(1.0 if self.position is not None else 0.45)
+        self.svg.render(p, QRectF(-size / 2, -size / 2, size, size))
         p.restore()
 
-        # angle readout
-        p.setPen(TEXT if self.position is not None else DIM)
-        p.setFont(_font(20, bold=True))
-        text = "—" if self.position is None else f"{angle:+.0f}°"
-        p.drawText(QRectF(0, h - strip_h, w, 34), Qt.AlignCenter, text)
+        y = top + size + 8
+        p.setPen(TEXT if self.position is not None else FAINT)
+        p.setFont(_font(30, QFont.DemiBold, 0.3))
+        p.drawText(QRectF(0, y, w, 40), Qt.AlignHCenter | Qt.AlignTop,
+                   "—" if self.position is None else _signed(self.angle))
+        y += 40 + 12 + 8
 
-        # range strip: where the wheel is within the full rotation range
+        # range strip: groove, teal from the centre to the position, centre tick, white handle
         half = self.range_deg / 2
-        x0, x1 = w * 0.12, w * 0.88
-        y = h - 34
-        p.setPen(QPen(TRACK, 6, Qt.SolidLine, Qt.RoundCap))
-        p.drawLine(QPointF(x0, y), QPointF(x1, y))
-        p.setPen(QPen(DIM, 1))
-        p.drawLine(QPointF((x0 + x1) / 2, y - 7), QPointF((x0 + x1) / 2, y + 7))
+        strip_w = min(560, w - 40)
+        x0 = (w - strip_w) / 2
+        label_w, gap = 44, 12
+        g0, g1 = x0 + label_w + gap, x0 + strip_w - label_w - gap
+        mid = (g0 + g1) / 2
+        p.setFont(_font(11.5))
+        p.setPen(FAINT)
+        p.drawText(QRectF(x0, y - 8, label_w, 16), Qt.AlignRight | Qt.AlignVCenter, f"{MINUS}{half:.0f}°")
+        p.drawText(QRectF(g1 + gap, y - 8, label_w, 16), Qt.AlignLeft | Qt.AlignVCenter, f"+{half:.0f}°")
+        p.setPen(Qt.NoPen)
+        p.setBrush(GROOVE)
+        p.drawRoundedRect(QRectF(g0, y - 2, g1 - g0, 4), 2, 2)
         if self.position is not None:
-            x = (x0 + x1) / 2 + max(-1, min(1, self.position)) * (x1 - x0) / 2
-            p.setPen(Qt.NoPen)
-            p.setBrush(YELLOW)
+            x = mid + max(-1.0, min(1.0, self.position)) * (g1 - g0) / 2
+            p.setBrush(TEAL)
+            p.drawRect(QRectF(min(mid, x), y - 2, abs(x - mid), 4))
+        p.setBrush(FAINT)
+        p.drawRect(QRectF(mid - 0.5, y - 6, 1, 12))
+        if self.position is not None:
+            p.setBrush(PANEL)
+            p.drawEllipse(QPointF(x, y), 10, 10)
+            p.setBrush(QColor("#ffffff"))
             p.drawEllipse(QPointF(x, y), 7, 7)
-        p.setPen(DIM)
-        p.setFont(_font(8.5))
-        label = f"AUTO · ±{half:.0f}°" if self.auto else f"SEN {self.range_deg:.0f}° · ±{half:.0f}°"
-        p.drawText(QRectF(x0, y + 8, x1 - x0, 20), Qt.AlignCenter, label)
-        p.drawText(QRectF(x0 - 60, y - 9, 54, 18), Qt.AlignRight | Qt.AlignVCenter, f"-{half:.0f}°")
-        p.drawText(QRectF(x1 + 6, y - 9, 60, 18), Qt.AlignLeft | Qt.AlignVCenter, f"+{half:.0f}°")
+        y += 8 + 12
+        p.setPen(HELPER)
+        p.setFont(_font(12))
+        text = f"Sensitivity AUTO · ±{half:.0f}°" if self.auto else f"Sensitivity {self.range_deg:.0f}° · ±{half:.0f}°"
+        p.drawText(QRectF(0, y, w, 18), Qt.AlignHCenter | Qt.AlignTop, text)
 
 
 class PedalBar(QWidget):
-    """Vertical bar that fills with pedal travel; holds the recent peak; turns yellow at 100%."""
+    """Value above, a 44×220 bar that fills with pedal travel (white mark holds the recent peak; yellow at 100%),
+    name and note below. A pedal that isn't connected is a dashed outline."""
+
+    BAR_W, BAR_H = 44, 220
 
     def __init__(self, name: str, parent=None):
         super().__init__(parent)
@@ -120,7 +127,7 @@ class PedalBar(QWidget):
         self.peak = 0.0
         self.peak_at = 0.0
         self.note = ""
-        self.setMinimumSize(58, 250)
+        self.setFixedSize(88, 22 + 10 + self.BAR_H + 10 + 18 + 4 + 16)  # wide enough for 'Not connected'
 
     def set_value(self, value):
         now = time.monotonic()
@@ -132,57 +139,51 @@ class PedalBar(QWidget):
     def paintEvent(self, _):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        w, h = self.width(), self.height()
-        bar_w = 44
-        top, bottom = 30, h - (24 if self.note else 6)
-        bar = QRectF((w - bar_w) / 2, top, bar_w, bottom - top)
-        p.setPen(Qt.NoPen)
-        p.setBrush(TRACK)
-        p.drawRect(bar)
-        full = self.value is not None and self.value >= 0.995
-        if self.value is not None and self.value > 0:
-            fill = QRectF(bar.left(), bar.bottom() - bar.height() * self.value, bar_w, bar.height() * self.value)
-            if full:
-                p.setBrush(YELLOW)
-            else:
-                g = QLinearGradient(0, bar.bottom(), 0, bar.top())
-                g.setColorAt(0, TEAL_DARK)
-                g.setColorAt(1, TEAL)
-                p.setBrush(g)
-            p.drawRect(fill)
-        if self.value is not None and self.peak > 0.01:
-            y = bar.bottom() - bar.height() * self.peak
-            p.setPen(QPen(YELLOW if self.peak >= 0.995 else TEXT, 2))
-            p.drawLine(QPointF(bar.left() - 4, y), QPointF(bar.right() + 4, y))
-        # percentage above
-        p.setPen(YELLOW if full else (TEXT if self.value is not None else DIM))
-        p.setFont(_font(10.5, bold=True))
-        text = "—" if self.value is None else f"{self.value * 100:.0f}%"
-        p.drawText(QRectF(0, 0, w, top - 6), Qt.AlignCenter, text)
-        # name, rotated, inside the bar at the bottom
-        p.save()
-        p.translate(bar.center().x(), bar.bottom() - 8)
-        p.rotate(-90)
-        p.setPen(QColor("#111214") if (self.value or 0) > 0.35 else TEXT)
-        p.setFont(_font(9.5, bold=True))
-        p.drawText(QRectF(0, -10, bar.height() - 16, 20), Qt.AlignLeft | Qt.AlignVCenter,
-                   self.name if self.value is not None else f"{self.name} (not connected)")
-        p.restore()
-        if self.note:
-            p.setPen(DIM)
-            p.setFont(_font(8.5))
-            p.drawText(QRectF(0, h - 20, w, 18), Qt.AlignCenter, self.note)
+        w = self.width()
+        missing = self.value is None
+        full = not missing and self.value >= 0.995
+        p.setFont(_font(15, QFont.DemiBold))
+        p.setPen(FAINT if missing else (YELLOW if full else TEXT))
+        p.drawText(QRectF(0, 0, w, 22), Qt.AlignCenter, "—" if missing else f"{self.value * 100:.0f}%")
+
+        bar = QRectF((w - self.BAR_W) / 2, 32, self.BAR_W, self.BAR_H)
+        if missing:
+            p.setPen(QPen(CONTROL, 1, Qt.DashLine))
+            p.setBrush(Qt.NoBrush)
+            p.drawRoundedRect(bar.adjusted(0.5, 0.5, -0.5, -0.5), 5, 5)
+        else:
+            clip = QPainterPath()
+            clip.addRoundedRect(bar, 5, 5)
+            p.setClipPath(clip)
+            p.fillRect(bar, GROOVE)
+            if self.value > 0:
+                fill_h = bar.height() * self.value
+                p.fillRect(QRectF(bar.left(), bar.bottom() - fill_h, bar.width(), fill_h), YELLOW if full else TEAL)
+            if self.peak > 0.01:
+                y = bar.bottom() - bar.height() * min(1.0, self.peak + 0.02)
+                p.fillRect(QRectF(bar.left(), y, bar.width(), 2), QColor("#ffffff"))
+            p.setClipping(False)
+
+        y = bar.bottom() + 10
+        p.setFont(_font(12.5, QFont.Medium))
+        p.setPen(FAINT if missing else TEXT)
+        p.drawText(QRectF(0, y, w, 18), Qt.AlignHCenter | Qt.AlignTop, self.name)
+        note = "Not connected" if missing else self.note
+        if note:
+            p.setFont(_font(11))
+            p.setPen(HELPER)
+            p.drawText(QRectF(0, y + 22, w, 16), Qt.AlignHCenter | Qt.AlignTop, note)
 
 
 class ShiftIndicator(QWidget):
-    """Downshift/upshift dots that flash on each shift, as in the official app."""
+    """Two circles joined by a line, labelled at the ends; a circle fills yellow briefly on each shift."""
 
-    def __init__(self, title_up="UPSHIFT", title_down="DOWNSHIFT", parent=None):
+    def __init__(self, title_top="Downshift", title_bottom="Upshift", parent=None):
         super().__init__(parent)
-        self.titles = {"down": title_down, "up": title_up}
+        self.titles = {"down": title_top, "up": title_bottom}
         self.flash = {"up": 0.0, "down": 0.0}
         self.counts = {"up": 0, "down": 0}
-        self.setMinimumSize(120, 150)
+        self.setFixedSize(96, 18 + 10 + 16 + 10 + 88 + 10 + 16 + 10 + 18)
         self._timer = QTimer(self, interval=40, timeout=self._tick)
 
     def pulse(self, which: str):
@@ -199,20 +200,74 @@ class ShiftIndicator(QWidget):
     def paintEvent(self, _):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        w, h = self.width(), self.height()
-        cx = w / 2
-        y_down, y_up = 42, h - 42
-        p.setPen(QPen(QColor("#5a5d63"), 2))
-        p.drawLine(QPointF(cx, y_down + 9), QPointF(cx, y_up - 9))
+        w, cx = self.width(), self.width() / 2
         now = time.monotonic()
-        p.setFont(_font(9.5, bold=True))
-        for which, y, ty in (("down", y_down, 4), ("up", y_up, h - 22)):
+        p.setFont(_font(12.5, QFont.Medium))
+        p.setPen(BODY_MUTED)
+        p.drawText(QRectF(0, 0, w, 18), Qt.AlignCenter, self.titles["down"])
+        y_down = 18 + 10 + 8
+        y_up = y_down + 8 + 10 + 88 + 10 + 8
+        p.fillRect(QRectF(cx - 1, y_down + 8 + 10, 2, 88), LINE)
+        for which, y in (("down", y_down), ("up", y_up)):
             lit = self.flash[which] > now
-            p.setPen(QPen(YELLOW if lit else TEXT, 2))
+            p.setPen(QPen(YELLOW if lit else SECONDARY, 2))
             p.setBrush(YELLOW if lit else Qt.NoBrush)
-            p.drawEllipse(QPointF(cx, y), 8, 8)
-            p.setPen(YELLOW if lit else TEXT)
-            p.drawText(QRectF(0, ty, w, 18), Qt.AlignCenter, self.titles[which])
+            p.drawEllipse(QPointF(cx, y), 7, 7)
+        p.setPen(BODY_MUTED)
+        p.drawText(QRectF(0, y_up + 8 + 10, w, 18), Qt.AlignCenter, self.titles["up"])
+
+
+class HPattern(QWidget):
+    """The H-pattern gate (R 1 3 5 7 over 2 4 6, joined by a crossbar); the selected gear lights up yellow."""
+
+    TOP = ("R", "1", "3", "5", "7")
+    BOTTOM = ("2", "4", "6")
+    PITCH = 36
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.gear = None
+        self.setFixedSize(162 + 24, 132 + 14 + 16)
+
+    def set_gear(self, gear: str | None):
+        if gear != self.gear:
+            self.gear = gear
+            self.update()
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        ox = 12  # room for the outer labels
+        col = {g: ox + 9 + i * self.PITCH for i, g in enumerate(self.TOP)}
+        col.update({g: ox + 9 + (i + 1) * self.PITCH for i, g in enumerate(self.BOTTOM)})
+        top_c, bottom_c, bar_y = 24 + 9, 90 + 9, 66
+        # lines stop short of the circles: 5px gap below/above each ring
+        for g in self.TOP:
+            outer = g in ("R", "7")
+            p.fillRect(QRectF(col[g] - 1, 47, 2, 20 if outer else 38), LINE)
+        for g in self.BOTTOM:
+            p.fillRect(QRectF(col[g] - 1, bar_y, 2, 90 - 5 - bar_y), LINE)
+        p.fillRect(QRectF(col["R"] - 1, bar_y - 1, col["7"] - col["R"] + 2, 2), LINE)
+        p.setFont(_font(12.5, QFont.DemiBold))
+        for g, cy, label_y in ([(g, top_c, 0) for g in self.TOP] + [(g, bottom_c, 116) for g in self.BOTTOM]):
+            lit = g == self.gear
+            p.setPen(QPen(YELLOW if lit else SECONDARY, 2))
+            p.setBrush(YELLOW if lit else Qt.NoBrush)
+            p.drawEllipse(QPointF(col[g], cy), 8, 8)
+            p.setPen(YELLOW if lit else SECONDARY)
+            p.drawText(QRectF(col[g] - 12, label_y, 24, 16), Qt.AlignCenter, g)
+        p.setFont(_font(11, QFont.Bold, 1.2))
+        p.setPen(HELPER)
+        p.drawText(QRectF(0, 132 + 14, self.width(), 16), Qt.AlignCenter, "H-PATTERN")
+
+
+def _panel(title: str):
+    frame = QFrame(objectName="panel")
+    v = QVBoxLayout(frame)
+    v.setContentsMargins(20, 16, 20, 20)
+    v.setSpacing(12)
+    v.addWidget(QLabel(title, objectName="groupTitle"))
+    return frame, v
 
 
 class InputPage(QWidget):
@@ -221,24 +276,30 @@ class InputPage(QWidget):
         self.reader = reader
         self.range_deg, self.auto, self.brf = 1080, False, None
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(32, 18, 32, 18)
-        outer.setSpacing(14)
+        outer.setContentsMargins(32, 20, 32, 32)
+        outer.setSpacing(16)
 
         self.status = QLabel(objectName="dim", wordWrap=True)
         outer.addWidget(self.status)
 
-        grid = QGridLayout()
-        grid.setSpacing(14)
+        grid = QHBoxLayout()
+        grid.setSpacing(16)
         outer.addLayout(grid, 1)
 
-        wheel_panel, wl = self._panel("STEERING")
+        wheel_panel, wl = _panel("STEERING")
+        wl.setContentsMargins(20, 16, 20, 24)
         self.wheel = WheelGraphic()
         wl.addWidget(self.wheel, 1)
-        grid.addWidget(wheel_panel, 0, 0, 2, 1)
+        grid.addWidget(wheel_panel, 3)
 
-        pedal_panel, pl = self._panel("PEDALS")
+        right = QVBoxLayout()
+        right.setSpacing(16)
+        grid.addLayout(right, 2)
+
+        pedal_panel, pl = _panel("PEDALS")
+        pl.setSpacing(16)
         row = QHBoxLayout()
-        row.setSpacing(18)
+        row.setSpacing(4)  # 88px columns: the 44px bars end up ~48px apart, as in the design
         row.addStretch(1)
         self.bars = {}
         for name in PEDALS:
@@ -246,42 +307,29 @@ class InputPage(QWidget):
             self.bars[name] = bar
             row.addWidget(bar)
         row.addStretch(1)
-        pl.addLayout(row, 1)
-        grid.addWidget(pedal_panel, 0, 1)
+        pl.addLayout(row)
+        right.addWidget(pedal_panel)
 
-        shift_panel, sl = self._panel("SHIFTER")
+        shift_panel, sl = _panel("SHIFTER & PADDLES")
+        sl.setSpacing(16)
         srow = QHBoxLayout()
-        srow.setSpacing(24)
-        self.shifter = ShiftIndicator()
-        srow.addWidget(self.shifter, 1)
-        gear_box = QVBoxLayout()
-        gear_box.setSpacing(2)
-        self.mode_lbl = QLabel(objectName="dim", alignment=Qt.AlignCenter)
-        self.gear_lbl = QLabel("N", objectName="gear", alignment=Qt.AlignCenter)
-        gear_box.addStretch(1)
-        gear_box.addWidget(self.gear_lbl)
-        gear_box.addWidget(self.mode_lbl)
-        gear_box.addStretch(1)
-        srow.addLayout(gear_box, 1)
-        self.paddles = ShiftIndicator("RIGHT PADDLE", "LEFT PADDLE")
-        srow.addWidget(self.paddles, 1)
+        srow.setContentsMargins(8, 0, 8, 0)
+        srow.setSpacing(16)
+        self.shifter = ShiftIndicator("Downshift", "Upshift")
+        self.hpattern = HPattern()
+        self.paddles = ShiftIndicator("Left paddle", "Right paddle")
+        srow.addWidget(self.shifter, 0, Qt.AlignVCenter)
+        srow.addStretch(1)
+        srow.addWidget(self.hpattern, 0, Qt.AlignVCenter)
+        srow.addStretch(1)
+        srow.addWidget(self.paddles, 0, Qt.AlignVCenter)
         sl.addLayout(srow, 1)
-        grid.addWidget(shift_panel, 1, 1)
-        grid.setColumnStretch(0, 3)
-        grid.setColumnStretch(1, 2)
+        right.addWidget(shift_panel, 1)
 
         reader.changed.connect(self.update_view)
         reader.shifted.connect(self._shifted)
         self._peak_timer = QTimer(self, interval=250, timeout=self._refresh_bars)  # lets peak markers expire
         self.update_view()
-
-    def _panel(self, title):
-        frame = QFrame(objectName="panel")
-        v = QVBoxLayout(frame)
-        v.setContentsMargins(24, 16, 24, 18)
-        v.setSpacing(10)
-        v.addWidget(QLabel(title, objectName="panelTitle"))
-        return frame, v
 
     def set_tuning(self, sen: int | None, sen_max: int, brf: int | None):
         """SEN decides how far the drawn wheel turns; BRF is shown under the brake bar."""
@@ -311,13 +359,11 @@ class InputPage(QWidget):
     def update_view(self):
         r = self.reader
         if r.is_open:
-            self.status.setText("Move the wheel, press the pedals and shift to see the inputs live. "
-                                "The marker on each bar holds the highest point briefly; the brake bar turns "
-                                "yellow at 100%, which is handy for setting BRF.")
+            self.status.setText("Move the wheel, press the pedals and shift to see inputs live. The white marker "
+                                "holds each pedal's peak briefly; the brake bar turns yellow at 100%, which helps "
+                                "when setting Brake Force.")
         else:
             self.status.setText(r.error or "No wheel base input device found.")
         self.wheel.set_state(r.steering() if r.is_open else None, self.range_deg, self.auto)
         self._refresh_bars()
-        mode = {"sequential": "SEQUENTIAL", "h-pattern": "H-PATTERN"}.get(r.mode, "shift to detect mode")
-        self.mode_lbl.setText(mode)
-        self.gear_lbl.setText(r.gear() if r.mode == "h-pattern" else "–")
+        self.hpattern.set_gear(r.gear() if r.is_open and r.mode == "h-pattern" else None)

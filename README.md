@@ -48,11 +48,12 @@ not affiliated with or endorsed by Fanatec / Endor AG.
 - **Recommended baseline.** Never tuned your wheel base? On first start the app asks which wheel base you have and
   offers to start from Fanatec's recommended baseline, with your current values shown next to the recommended ones
   so you can see what changes. It's written to your current setup after a backup, or you keep your settings as they
-  are. Available any time with *Recommended baseline…* on the Settings page.
-- **System check.** On first start, and any time with *System check…* on the Settings page: the app checks the driver, the
+  are. Available any time under *Setup tools → Recommended baseline…* on the Tuning page, next to *Reset to factory
+  defaults…*.
+- **System check.** On first start, and any time with *Check* on the Settings page: the app checks the driver, the
   wheel base, permissions and the axis deadzone, and shows the exact command to fix anything that's missing.
 - **Switch setups from Steam.** Put `fanatec-pitbox --setup 3 %command%` in a game's launch options and the wheel base
-  switches to that setup when the game starts (*Settings → Steam launch options* has the line for each setup, ready
+  switches to that setup when the game starts (*Settings → Launch from Steam* has the line for each setup, ready
   to copy). If anything goes wrong, the game still starts.
 - **Standard / Advanced mode** mirrors the base's own tuning menu.
 

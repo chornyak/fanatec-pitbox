@@ -18,8 +18,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from PySide6.QtCore import QEvent, QTimer  # noqa: E402
-from PySide6.QtWidgets import QApplication, QInputDialog, QLabel, QMessageBox  # noqa: E402
+from PySide6.QtCore import QEvent, Qt, QTimer  # noqa: E402
+from PySide6.QtWidgets import QApplication, QInputDialog, QLabel, QLineEdit, QMessageBox  # noqa: E402
 
 import fakesys  # noqa: E402
 from fanatec_pitbox import app as app_mod  # noqa: E402
@@ -136,12 +136,13 @@ class WindowTests(WindowBase):
         self.assertTrue(self.win.controls["brF"].isEnabled())
 
     def test_detects_base_and_shows_active_setup(self):
-        self.assertEqual(self.win.model_lbl.text(), "DD WHEEL BASE")
+        self.assertEqual(self.win.model_lbl.text(), "DD Wheel Base")
+        self.assertEqual((self.win.ro_base.text(), self.win.ro_setup.text()), ("Connected", "Setup 2"))
         self.assertNotIn("DRI", self.win.controls)  # CSL Elite only
         self.assertEqual(self.win.controls["SEN"].box.text(), "1080°")
-        self.assertTrue(self.win.slot_cards[2].badge.isVisibleTo(self.win.slot_cards[2]))
-        self.assertFalse(self.win.slot_cards[1].badge.isVisibleTo(self.win.slot_cards[1]))
-        self.assertIn("SETUP 2", self.win.editing_lbl.text())
+        self.assertTrue(self.win.slot_cards[2].property("active"))  # yellow number box
+        self.assertFalse(self.win.slot_cards[1].property("active"))
+        self.assertEqual(self.win.editing_lbl.text(), "Setup 2")
 
     def test_switching_setup_and_alias(self):
         self.win.slot_cards[4].clicked.emit(4)
@@ -151,9 +152,9 @@ class WindowTests(WindowBase):
         with mock.patch.object(QInputDialog, "getText", return_value=("Rally", True)):
             self.win.slot_cards[4].rename.emit(4)
         self.assertEqual(self.win.slot_cards[4].title.text(), "Rally")
-        self.assertEqual(self.win.slot_cards[4].sub.text(), "SETUP 4")
+        self.assertEqual(self.win.slot_cards[4].number.text(), "4")
         self.assertEqual(store.State().aliases, {4: "Rally"})
-        self.assertIn("SETUP 4 · Rally", self.win.editing_lbl.text())
+        self.assertEqual(self.win.editing_lbl.text(), "Rally")
 
     # -- draft / write ----------------------------------------------------------------------
     def test_edits_are_not_written_until_write_clicked(self):
@@ -162,7 +163,8 @@ class WindowTests(WindowBase):
         pump(0.3)
         self.assertEqual(self.fake.read("DPR"), 100)
         self.assertTrue(ctl.box.property("dirty"))
-        self.assertIn("(1)", self.win.write_btn.text())
+        self.assertEqual(self.win.draft_lbl.text(), "1 unwritten change")
+        self.assertFalse(self.win.dirty_bar.isHidden())
         self.win.refresh()
         self.assertEqual(ctl.box.value(), 70)
         self.win.write_btn.click()
@@ -216,8 +218,8 @@ class WindowTests(WindowBase):
         self.assertEqual(p.aliases, {2: "ACC"})
         self.assertEqual(self.fake.read("SLOT"), 2)  # back where we started
         self.assertEqual(store.State().loaded, "Mine")
-        self.assertIn("Mine", self.win.loaded_lbl.text())
-        self.assertNotIn("CHANGED", self.win.loaded_lbl.text())
+        self.assertEqual(self.win.ro_profile.text(), "Mine")
+        self.assertIn("matches", self.win.ro_profile.toolTip())
         self.assertIn("1080°", self.win.slot_cards[2].summary.text())
 
     def test_load_profile_writes_every_setup_with_auto_backup(self):
@@ -225,7 +227,7 @@ class WindowTests(WindowBase):
                                  {1: "ACC", 3: "iRacing"}))
         self.win._reload_profiles(select="Other")
         with mock.patch.object(QMessageBox, "warning", return_value=QMessageBox.Ok):
-            self.win.load_btn.click()
+            self.win.profile_rows["Other"].load_btn.click()
         self.wait_idle(20)
         self.fake.sync()
         for n in range(1, 6):
@@ -240,7 +242,7 @@ class WindowTests(WindowBase):
         self.fake.slots[2]["FF"] = 99
         self.fake._put({"FF": 99})
         self.win.refresh()
-        self.assertIn("CHANGED: SETUP 2", self.win.loaded_lbl.text())
+        self.assertIn("Setup 2 differs", self.win.ro_profile.toolTip())
 
     def test_load_stops_if_setup_switch_is_lost(self):
         store.save(store.Profile("P", {n: {"FF": 10} for n in range(1, 6)}))
@@ -255,7 +257,7 @@ class WindowTests(WindowBase):
 
         with mock.patch.object(base, "write", side_effect=stubborn), \
                 mock.patch.object(QMessageBox, "warning", return_value=QMessageBox.Ok):
-            self.win.load_btn.click()
+            self.win.profile_rows["P"].load_btn.click()
             self.wait_idle(20)
         self.fake.sync()
         self.assertEqual(self.fake.slots[4]["FF"], 100)  # never written
@@ -263,17 +265,18 @@ class WindowTests(WindowBase):
 
     def test_mode_switch_backs_up_all_setups(self):
         with mock.patch.object(QMessageBox, "warning", return_value=QMessageBox.Cancel):
-            self.win.mode_toggle.click()
+            self.win.mode_seg.buttons[0].click()
         self.assertEqual(self.fake.read("advanced_mode"), 1)
         with mock.patch.object(QMessageBox, "warning", return_value=QMessageBox.Ok):
-            self.win.mode_toggle.click()
+            self.win.mode_seg.buttons[0].click()
             self.wait_idle()
         self.assertEqual(self.fake.read("advanced_mode"), 0)
         backups = [p for p in store.load_all() if p.name.startswith("Auto-backup")]
         self.assertEqual(len(backups), 1)
         self.assertEqual(sorted(backups[0].slots), [1, 2, 3, 4, 5])
         self.win.refresh()
-        self.assertEqual(self.win.mode_toggle.text(), "Standard")
+        self.assertEqual(self.win.mode_seg.value(), 0)
+        self.assertEqual(self.win.editing_lbl.text(), "Standard setup")
         self.assertTrue(self.win.slot_cards[3].isHidden())
         self.assertFalse(self.win.save_new_btn.isEnabled())
 
@@ -366,29 +369,30 @@ class BaselineTests(WindowBase):
     def first_run(self, model="CSL DD with Boost Kit (8 Nm)"):
         """Open the wizard and go to the model step; with a model, choose it and go on to the baseline step."""
         dlg = self.wizard()
-        self.assertIn("STEP 1 OF 3", dlg.step_lbl.text())
+        self.assertEqual(len(dlg.steps), 3)
+        self.assertEqual(dlg.progress.current_title(), "1 Check your system")
         dlg.next_btn.click()
-        self.assertIn("YOUR WHEEL BASE", dlg.step_lbl.text())
+        self.assertEqual(dlg.progress.current_title(), "2 Your wheel base")
         if model:
-            dlg.model_combo.setCurrentIndex(dlg.model_combo.findText(model))
+            dlg.model_cards.select(model)
             dlg.next_btn.click()
-            self.assertIn("STARTING POINT", dlg.step_lbl.text())
+            self.assertEqual(dlg.progress.current_title(), "3 Starting point")
         return dlg
 
     def test_model_must_be_chosen_because_the_usb_id_is_shared(self):
         dlg = self.first_run(model=None)
-        labels = [dlg.model_combo.itemText(i) for i in range(dlg.model_combo.count())]
-        self.assertEqual(labels[0], "Choose your wheel base…")
+        labels = [m.label for _card, m in dlg.model_cards.cards.values()]
+        self.assertIsNone(dlg.model_cards.model())  # nothing chosen yet
         self.assertIn("GT DD Pro (5 Nm)", labels)
         self.assertIn("ClubSport DD (12 Nm)", labels)
         self.assertFalse(dlg.next_btn.isEnabled())
-        dlg.model_combo.setCurrentIndex(dlg.model_combo.findText("ClubSport DD (12 Nm)"))
+        dlg.model_cards.select("ClubSport DD (12 Nm)")
         self.assertTrue(dlg.next_btn.isEnabled())
         dlg.next_btn.click()
-        self.assertIn("same values are used for the ClubSport DD (12 Nm)", dlg.picker.preview.text())
-        self.assertEqual(dlg.next_btn.text(), "APPLY AND FINISH")
+        self.assertIn("same values are used for the ClubSport DD (12 Nm)", dlg.picker.note.text())
+        self.assertEqual(dlg.next_btn.text(), "Apply and finish")
         dlg.keep_rb.click()
-        self.assertEqual(dlg.next_btn.text(), "FINISH")
+        self.assertEqual(dlg.next_btn.text(), "Finish")
         dlg.next_btn.click()
         pump(0.2)
         self.assertEqual(self.win.model().key, "clubsport-dd")  # remembered when keeping current settings too
@@ -400,13 +404,13 @@ class BaselineTests(WindowBase):
         self.fake._put({"INT": 11})
         self.win.refresh()
         dlg = self.first_run()
-        text = dlg.picker.preview.text()
-        self.assertIn("Current", text)
-        self.assertIn("Recommended", text)
-        self.assertRegex(text, r"\[INT\] FFB Interpolation Filter</td><td[^>]*>11</td><td style='[^']*f2e600[^']*'>6<")
-        self.assertRegex(text, r"\[NDP\] Natural Damper</td><td[^>]*>15%</td><td style='padding:3px 0;'>15%<")
-        self.assertIn("1 value will change", text)
-        self.assertNotIn("same values are used", text)  # the post names the CSL DD
+        rows = {key: (cur, new, changed) for key, cur, new, changed in dlg.picker.table_rows()}
+        self.assertEqual(rows["INT"], ("11", "6", True))  # highlighted: current → recommended
+        self.assertEqual(rows["NDP"], ("15%", "15%", False))
+        self.assertEqual(dlg.picker.apply_to.currentText(), "Setup 2 (active)")
+        note = dlg.picker.note.text()
+        self.assertIn("1 value will change", note)
+        self.assertNotIn("same values are used", note)  # the post names the CSL DD
         dlg.keep_rb.click()
         self.assertTrue(dlg.scroll.isHidden())
         self.assertFalse(dlg.keep_note.isHidden())
@@ -417,7 +421,7 @@ class BaselineTests(WindowBase):
         self.win.refresh()
         dlg = self.first_run()
         self.assertTrue(dlg.recommended_rb.isChecked())
-        self.assertTrue(dlg.picker.current_box.isChecked())
+        self.assertEqual(dlg.picker.target_slot(), 2)  # the active setup by default
         dlg.accept()
         self.wait_idle(20)
         self.fake.sync()
@@ -432,8 +436,7 @@ class BaselineTests(WindowBase):
 
     def test_first_run_to_another_setup_keeps_the_active_one(self):
         dlg = self.first_run()
-        dlg.picker.current_box.setChecked(False)
-        dlg.picker.slot_combo.setCurrentIndex(dlg.picker.slot_combo.findData(4))
+        dlg.picker.apply_to.setCurrentIndex(dlg.picker.apply_to.findData(4))
         self.assertEqual(dlg.picker.target_slot(), 4)
         before2 = dict(self.fake.slots[2])
         dlg.accept()
@@ -462,7 +465,7 @@ class BaselineTests(WindowBase):
         self.assertIn("choose your model in Settings", self.win.series_lbl.text())
 
     def open_baseline(self):
-        self.win.baseline_btn.click()
+        self.win.baseline_action.trigger()
         pump(0.2)
         dlg = self.win.baseline_dialog
         self.assertTrue(dlg.isVisible())
@@ -471,16 +474,16 @@ class BaselineTests(WindowBase):
     def test_baseline_window_asks_for_the_model_when_unknown(self):
         self.first_run(model=None).reject()
         pump(0.2)
-        self.assertTrue(self.win.baseline_btn.isEnabled())
+        self.assertTrue(self.win.baseline_action.isEnabled())
         dlg = self.open_baseline()
         self.assertFalse(dlg.apply_btn.isEnabled())  # no model chosen yet
-        dlg.model_combo.setCurrentIndex(dlg.model_combo.findText("CSL DD (5 Nm)"))
+        dlg.model_cards.select("CSL DD (5 Nm)")
         self.assertTrue(dlg.apply_btn.isEnabled())
         self.fake.slots[2]["NDP"] = 40
         self.fake._put({"NDP": 40})
         self.win.refresh()
         dlg.picker.refresh()
-        self.assertIn("1 value will change", dlg.picker.preview.text())
+        self.assertIn("1 value will change", dlg.picker.note.text())
         dlg.accept()
         self.wait_idle(20)
         self.fake.sync()
@@ -492,8 +495,9 @@ class BaselineTests(WindowBase):
         self.wait_idle(20)
         before = {n: dict(v) for n, v in self.fake.slots.items()}
         dlg = self.open_baseline()
-        self.assertEqual(dlg.model_combo.currentText(), "CSL DD with Boost Kit (8 Nm)")
-        self.assertIn("Already matches the recommended baseline", dlg.picker.preview.text())
+        self.assertIsNone(dlg.model_cards)  # model known: named in the subtitle instead
+        self.assertIn("CSL DD with Boost Kit (8 Nm)", dlg.subtitle_lbl.text())
+        self.assertIn("Already matches the recommended baseline", dlg.picker.note.text())
         dlg.reject()
         pump(0.3)
         self.fake.sync()
@@ -506,22 +510,20 @@ class BaselineTests(WindowBase):
         pump(0.3)
         self.assertNotIn(5, self.win.state.seen)  # never read so far
         picker = self.open_baseline().picker
-        picker.current_box.setChecked(False)
-        picker.slot_combo.setCurrentIndex(picker.slot_combo.findData(5))
+        picker.apply_to.setCurrentIndex(picker.apply_to.findData(5))
         self.wait_idle(10)
         pump(0.2)
         self.assertEqual(sorted(self.win.state.seen), [1, 2, 3, 4, 5])
         self.assertEqual(self.fake.read("SLOT"), 2)  # back on the active setup
-        self.assertIn("will change", picker.preview.text())
-        self.assertRegex(picker.preview.text(), r"\[NDP\] Natural Damper</td><td[^>]*>50%</td>")
+        self.assertIn("will change", picker.note.text())
+        self.assertIn(("NDP", "50%", "15%", True), picker.table_rows())
 
     def test_unknown_setups_are_not_read_with_unwritten_changes(self):
         self.first_run().reject()
         pump(0.3)
         self.win.controls["FF"].slider.setValue(60)
         picker = self.open_baseline().picker
-        picker.current_box.setChecked(False)
-        picker.slot_combo.setCurrentIndex(picker.slot_combo.findData(5))
+        picker.apply_to.setCurrentIndex(picker.apply_to.findData(5))
         pump(0.5)
         self.assertIsNone(self.win.busy)
         self.assertNotIn(5, self.win.state.seen)
@@ -541,7 +543,7 @@ class BaselineTests(WindowBase):
     def test_check_step_lists_checks_with_fix_commands(self):
         dlg = self.wizard()
         self.assertIn("1 suggestion", dlg.check_summary.text())
-        cmds = [w.text() for w in dlg.check_list.findChildren(QLabel) if w.objectName() == "fixCommand"]
+        cmds = [w.text() for w in dlg.check_list.findChildren(QLineEdit) if w.objectName() == "fixCommand"]
         self.assertEqual(cmds, ["sudo pacman -S joyutils"])
         self.checks = [Check("hid-fanatecff driver", OK, "The driver is loaded.")]
         dlg.recheck()
@@ -557,7 +559,7 @@ class BaselineTests(WindowBase):
         self.win = MainWindow()
         dlg = self.wizard()
         self.assertEqual(len(dlg.steps), 1)
-        self.assertEqual(dlg.next_btn.text(), "FINISH")
+        self.assertEqual(dlg.next_btn.text(), "Finish")
         self.assertIn("1 problem to fix", dlg.check_summary.text())
         dlg.next_btn.click()
         pump(0.2)
@@ -565,24 +567,27 @@ class BaselineTests(WindowBase):
 
 
 class SettingsPanelTests(WindowBase):
-    def test_system_check_summary_and_popup(self):
+    def test_system_check_dot_button_and_popup(self):
         self.win.tab_group.button(2).click()
-        mark = self.win.check_mark  # one mark next to the button in Wheel base & system
-        self.assertEqual((mark.text(), mark.property("state")), ("!", "warn"))
-        self.assertIn("1 suggestion", mark.toolTip())
+        dot, btn = self.win.check_dot, self.win.check_btn
+        self.assertEqual(dot.property("state"), "warn")  # a suggestion: Check offered, not primary
+        self.assertTrue(btn.isEnabled())
+        self.assertFalse(btn.property("primary"))
         self.checks = [Check("hid-fanatecff driver", FAIL, "Not loaded.", "sudo modprobe hid_fanatec")]
-        self.win._open_system_check()
+        btn.click()
         dlg = self.win.system_check_dialog
         self.assertTrue(dlg.isVisible())
         self.assertIn("1 problem to fix", dlg.summary.text())
-        cmds = [w.text() for w in dlg.check_list.findChildren(QLabel) if w.objectName() == "fixCommand"]
+        cmds = [w.text() for w in dlg.check_list.findChildren(QLineEdit) if w.objectName() == "fixCommand"]
         self.assertEqual(cmds, ["sudo modprobe hid_fanatec"])
         dlg.accept()
         pump(0.1)
-        self.assertEqual((mark.text(), mark.property("state")), ("!", "fail"))  # refreshed on close
+        self.assertEqual(dot.property("state"), "fail")  # refreshed on close; Check becomes the primary
+        self.assertTrue(btn.property("primary"))
         self.checks = [Check("hid-fanatecff driver", OK, "The driver is loaded.")]
         self.win._recheck_system()
-        self.assertEqual((mark.text(), mark.property("state")), ("✓", "ok"))
+        self.assertEqual(dot.property("state"), "ok")
+        self.assertFalse(btn.isEnabled())  # all green: nothing to check
 
     def test_steam_launch_line_for_the_chosen_setup(self):
         self.win.state.aliases[3] = "iRacing"
@@ -591,13 +596,67 @@ class SettingsPanelTests(WindowBase):
         self.assertEqual(combo.currentData(), 2)  # starts on the active setup
         self.assertTrue(cmd.text().endswith("fanatec-pitbox --setup 2 %command%"), cmd.text())
         combo.setCurrentIndex(combo.findData(3))
-        self.assertEqual(combo.currentText(), "SETUP 3 · iRacing")
+        self.assertEqual(combo.currentText(), "Setup 3 · iRacing")
         self.assertTrue(cmd.text().endswith("fanatec-pitbox --setup 3 %command%"), cmd.text())
         self.win.steam_copy.click()
         self.assertEqual(QApplication.clipboard().text(), cmd.text())
         self.win._update_view()
         self.assertEqual(combo.currentData(), 3)  # the user's choice is kept
 
+    def test_model_change_dialog(self):
+        self.assertEqual(self.win.model_value.text(), "Not chosen")
+        self.win.model_change_btn.click()
+        dlg = self.win.model_dialog
+        self.assertFalse(dlg.save_btn.isEnabled())
+        dlg.cards.cards["gt-dd-pro-boost"][0].radio.setChecked(True)
+        dlg.accept()
+        pump(0.1)
+        self.assertEqual(self.win.model_value.text(), "GT DD Pro with Boost Kit (8 Nm)")
+        self.assertEqual(self.win.model_lbl.text(), "DD Pro Wheel Base")
+
+    def test_profiles_panel(self):
+        with mock.patch.object(QInputDialog, "getText", return_value=("Mine", True)):
+            self.win.save_new_btn.click()
+        self.wait_idle()
+        store.save(store.Profile("League", {n: {"FF": 90} for n in range(1, 6)}, {4: "LMU"}, saved="2026-09-18 19:42"))
+        self.win._reload_profiles()
+        rows = self.win.profile_rows
+        self.assertEqual(list(rows), ["Mine", "League"])  # loaded profile first
+        self.assertFalse(rows["Mine"].pill.isHidden())
+        self.assertTrue(rows["League"].pill.isHidden())
+        self.assertEqual(rows["League"].date.text(), "18 Sep 2026, 19:42")
+        self.assertTrue(rows["League"].load_box.isHidden())  # collapsed until selected
+        rows["League"].selected.emit("League")
+        self.assertFalse(rows["League"].load_box.isHidden())
+        self.assertEqual(rows["League"].details.text(), "Setup 1 · Setup 2 · Setup 3 · LMU · Setup 5")
+        rows["Mine"].selected.emit("Mine")
+        self.assertTrue(rows["Mine"].load_box.isHidden())  # the loaded profile has nothing to load
+        self.assertEqual(self.win.save_new_btn.text(), "+")  # save as new: the + next to the PC side's helper
+        self.assertTrue(self.win.differs_box.isHidden())
+        self.fake.slots[2]["FF"] = 55
+        self.fake._put({"FF": 55})
+        self.win.refresh()
+        self.assertFalse(self.win.differs_box.isHidden())
+        self.assertEqual(self.win.differs_lbl.text(), "Setup 2 differs from “Mine”")
+        # ⋯ menu: duplicate, rename, delete
+        with mock.patch.object(QInputDialog, "getText", return_value=("League 2", True)):
+            rows["League"].action.emit("League", "duplicate")
+        self.assertIn("League 2", self.win.profile_rows)
+        with mock.patch.object(QInputDialog, "getText", return_value=("Mine renamed", True)):
+            self.win.profile_rows["Mine"].action.emit("Mine", "rename")
+        self.assertEqual(store.State().loaded, "Mine renamed")
+        with mock.patch.object(QMessageBox, "question", return_value=QMessageBox.Yes):
+            self.win.profile_rows["League 2"].action.emit("League 2", "delete")
+        self.assertNotIn("League 2", self.win.profile_rows)
+
+    def test_automatic_backups_are_folded_away(self):
+        for i in range(2):
+            store.save(store.Profile(f"Auto-backup 2026-10-0{i + 1} 10.00.00", {1: {"FF": 80}}))
+        self.win._reload_profiles()
+        self.assertEqual(self.win.backups_header.count.text(), "2")
+        self.assertFalse(any(n.startswith("Auto-backup") for n in self.win.profile_rows))
+        self.win.backups_header.mouseReleaseEvent(type("E", (), {"button": lambda self: Qt.LeftButton})())
+        self.assertEqual(sum(n.startswith("Auto-backup") for n in self.win.profile_rows), 2)
 
 
 if __name__ == "__main__":

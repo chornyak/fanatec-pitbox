@@ -75,8 +75,9 @@ class PageTests(unittest.TestCase):
         self.assertAlmostEqual(page.wheel.angle, -540, delta=1)
         self.assertEqual(page.bars["brake"].value, 1.0)
         self.assertEqual(page.bars["brake"].note, "BRF 90%")
-        self.assertEqual(page.gear_lbl.text(), "1")
-        self.assertEqual(page.mode_lbl.text(), "H-PATTERN")
+        self.assertEqual(page.hpattern.gear, "1")  # gear 1 lit in the H-pattern
+        r.feed_bytes(ev(EV_KEY, 301, 0))
+        self.assertEqual(page.hpattern.gear, "N")  # neutral: nothing lit
         page.set_tuning(2530, 2530, 90)  # AUTO -> full 2520 range
         self.assertTrue(page.wheel.auto)
         self.assertAlmostEqual(page.wheel.angle, -1260, delta=1)
