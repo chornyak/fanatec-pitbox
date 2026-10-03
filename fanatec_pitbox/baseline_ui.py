@@ -92,6 +92,7 @@ class BaselinePicker(QWidget):
         while self.grid.count():
             item = self.grid.takeAt(0)
             if item.widget():
+                item.widget().hide()  # stays painted at its old place until the deferred delete runs otherwise
                 item.widget().deleteLater()
 
     def _cell(self, text: str, name: str, align=Qt.AlignLeft) -> QLabel:

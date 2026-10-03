@@ -77,6 +77,7 @@ class CheckList(QFrame):
         while self.rows.count():
             item = self.rows.takeAt(0)
             if item.widget():
+                item.widget().hide()
                 item.widget().deleteLater()
         for i, c in enumerate(checks):
             row = QWidget(objectName="checkRow" if i < len(checks) - 1 else "checkRowLast")
