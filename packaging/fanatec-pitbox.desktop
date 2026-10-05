@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Fanatec Pitbox
+Comment=Tuning, setups and input test for Fanatec wheel bases
+Exec=fanatec-pitbox
+Icon=fanatec-pitbox
+Categories=Settings;HardwareSettings;
+Keywords=fanatec;wheel;force feedback;sim racing;
+Terminal=false

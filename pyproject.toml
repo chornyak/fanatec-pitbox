@@ -1,10 +1,18 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "fanatec-pitbox"
 version = "0.1.0"
 description = "Tuning, setups and input test for Fanatec wheel bases on Linux, on top of the hid-fanatecff driver"
 requires-python = ">=3.11"
 license = "GPL-2.0-only"
+license-files = ["LICENSE"]
 dependencies = ["PySide6"]
+
+[project.urls]
+Homepage = "https://github.com/chornyak/fanatec-pitbox"
 
 [project.scripts]
 fanatec-pitbox = "fanatec_pitbox.__main__:main"
