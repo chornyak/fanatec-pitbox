@@ -18,7 +18,7 @@ Homepage = "https://github.com/chornyak/fanatec-pitbox"
 fanatec-pitbox = "fanatec_pitbox.__main__:main"
 
 [tool.setuptools]
-packages = ["fanatec_pitbox"]
+packages = ["fanatec_pitbox", "fanatec_pitbox.fonts", "fanatec_pitbox.icons"]
 
 [tool.setuptools.package-data]
 fanatec_pitbox = ["style.qss", "icons/*.svg", "fonts/*"]
