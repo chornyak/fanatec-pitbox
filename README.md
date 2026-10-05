@@ -68,6 +68,17 @@ not affiliated with or endorsed by Fanatec / Endor AG.
 
 ## Install and run
 
+**Arch / CachyOS:** build and install it as a package with the included PKGBUILD. That gives you the
+`fanatec-pitbox` command and a launcher entry, and pacman can remove it cleanly. It builds the latest release.
+
+```
+git clone https://github.com/chornyak/fanatec-pitbox.git
+cd fanatec-pitbox/packaging/arch
+makepkg -si
+```
+
+**Any distribution:** run it straight from the checkout.
+
 ```
 git clone https://github.com/chornyak/fanatec-pitbox.git
 cd fanatec-pitbox

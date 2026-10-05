@@ -1,0 +1,36 @@
+# Maintainer: chornyak <2799110+chornyak@users.noreply.github.com>
+pkgname=fanatec-pitbox
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Tuning, setups and input test for Fanatec wheel bases, on top of the hid-fanatecff driver"
+arch=('any')
+url="https://github.com/chornyak/fanatec-pitbox"
+license=('GPL-2.0-only AND OFL-1.1')  # app; bundled Noto fonts
+depends=('python' 'pyside6' 'hicolor-icon-theme')
+makedepends=('python-build' 'python-installer' 'python-setuptools' 'python-wheel')
+optdepends=('hid-fanatecff-dkms: the kernel driver the app works on top of (or install the driver yourself)')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('7aca4912ea493dfe79bc03ae05ebe134614154102e12ddb9cce7684eae5f1b0a')
+
+build() {
+  cd "$pkgname-$pkgver"
+  python -m build --wheel --no-isolation
+}
+
+check() {
+  cd "$pkgname-$pkgver"
+  QT_QPA_PLATFORM=offscreen python -m unittest discover -s tests
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  python -m installer --destdir="$pkgdir" dist/*.whl
+  install -Dm644 packaging/fanatec-pitbox.desktop "$pkgdir/usr/share/applications/fanatec-pitbox.desktop"
+  install -Dm644 fanatec_pitbox/icons/fanatec-pitbox.svg \
+    "$pkgdir/usr/share/icons/hicolor/scalable/apps/fanatec-pitbox.svg"
+  install -Dm644 fanatec_pitbox/fonts/OFL.txt "$pkgdir/usr/share/licenses/$pkgname/OFL.txt"
+  for size in 16 22 24 32; do
+    install -Dm644 "packaging/icons/fanatec-pitbox-$size.png" \
+      "$pkgdir/usr/share/icons/hicolor/${size}x${size}/apps/fanatec-pitbox.png"
+  done
+}
