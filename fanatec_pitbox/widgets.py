@@ -45,6 +45,11 @@ class ValueBox(QSpinBox):
         self.setKeyboardTracking(False)
         self.setFixedSize(68, 32)
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        # Qt 6.12 + the app stylesheet collapses the inner line edit to 1px; size it ourselves
+        self.lineEdit().setGeometry(self.rect().adjusted(2, 2, -2, -2))
+
     def textFromValue(self, value: int) -> str:
         return self.param.fmt(value)
 
