@@ -1,7 +1,7 @@
 """App-side storage in ~/.config/fanatec-pitbox.
 
 - state.json: setup names (aliases), the last values seen per setup, and the loaded profile.
-- profiles/*.toml: a profile is a snapshot of all 5 setups of the wheel base plus their names,
+- profiles/*.toml: a profile is a snapshot of all 6 setups of the wheel base plus their names,
   used to back up the base or swap a complete set. Only one profile is "loaded" at a time.
 """
 
@@ -20,7 +20,12 @@ CONFIG_DIR = Path(os.environ.get("FANATEC_PITBOX_CONFIG",
 PROFILE_DIR = CONFIG_DIR / "profiles"
 _OLD_CONFIG_DIR = CONFIG_DIR.parent / "fanatec-dash"  # the app's name before it became Fanatec Pitbox
 STATE_FILE = CONFIG_DIR / "state.json"
-SLOTS = range(1, 6)
+SLOTS = range(1, 7)
+
+
+def slot_label(n: int) -> str:
+    """The name the wheel's display uses: SETUP 1 shows as "A", SETUPs 2-6 as "S1"-"S5"."""
+    return "A" if n == 1 else f"S{n - 1}"
 
 
 @dataclass

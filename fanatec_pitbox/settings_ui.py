@@ -5,6 +5,7 @@ import time
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMenu, QPushButton, QToolButton, QVBoxLayout, QWidget
 
+from .profiles import slot_label
 from .widgets import repolish
 
 
@@ -73,7 +74,7 @@ class BaseSetupRow(QWidget):
         h = QHBoxLayout(self)
         h.setContentsMargins(8, 7, 8, 7)
         h.setSpacing(10)
-        self.number = QLabel(str(slot), objectName="setupNumber", alignment=Qt.AlignCenter)
+        self.number = QLabel(slot_label(slot), objectName="setupNumber", alignment=Qt.AlignCenter)
         self.number.setFixedSize(22, 22)
         self.title = QLabel(objectName="setupName")
         self.summary = QLabel(objectName="metaValue")
