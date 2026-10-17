@@ -5,6 +5,7 @@ from PySide6.QtGui import QValidator
 from PySide6.QtWidgets import (QButtonGroup, QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QSlider,
                                QSpinBox, QToolButton, QToolTip, QVBoxLayout, QWidget)
 
+from .profiles import slot_label
 from .params import ACP_LABELS, Param
 
 
@@ -227,7 +228,7 @@ class ParamControl(QWidget):
 
 
 class SlotCard(QFrame):
-    """Sidebar entry for one of the wheel base's 5 setups: number box, app-side name, summary."""
+    """Sidebar entry for one of the wheel base's 6 setups: number box, app-side name, summary."""
 
     clicked = Signal(int)
     rename = Signal(int)
@@ -241,7 +242,7 @@ class SlotCard(QFrame):
         h = QHBoxLayout(self)
         h.setContentsMargins(12, 10, 10, 10)
         h.setSpacing(12)
-        self.number = QLabel("S" if standard else str(slot), objectName="slotNumber", alignment=Qt.AlignCenter)
+        self.number = QLabel("S" if standard else slot_label(slot), objectName="slotNumber", alignment=Qt.AlignCenter)
         self.number.setFixedSize(26, 26)
         h.addWidget(self.number, 0, Qt.AlignVCenter)
         text = QVBoxLayout()
@@ -264,7 +265,7 @@ class SlotCard(QFrame):
             self.setToolTip("Click to make this the active setup on the wheel base.\nDouble-click or ✎ to name it.")
 
     def update_card(self, alias: str | None, summary: str, active: bool, enabled: bool):
-        self.title.setText("Standard setup" if self.standard else (alias or f"Setup {self.slot}"))
+        self.title.setText("Standard setup" if self.standard else (alias or f"Setup {slot_label(self.slot)}"))
         self.summary.setText(summary)
         self.summary.setVisible(bool(summary))
         self.setEnabled(enabled or active)

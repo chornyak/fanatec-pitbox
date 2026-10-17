@@ -20,10 +20,11 @@ def _warn(msg: str):
 
 
 def _resolve(setup: str, state: store.State) -> int | None:
-    """Setup number from "3", "SETUP 3" or a name given in the app (case-insensitive)."""
+    """Setup number from "A", "S3", "SETUP S3" or a name given in the app (case-insensitive)."""
     text = setup.strip().lower().removeprefix("setup").strip()
-    if text.isdigit() and 1 <= int(text) <= 5:
-        return int(text)
+    for n in store.SLOTS:
+        if text == store.slot_label(n).lower():
+            return n
     for n, alias in state.aliases.items():
         if alias.strip().lower() == setup.strip().lower():
             return n
@@ -45,13 +46,13 @@ def switch_setup(slot: int) -> bool:
         try:
             base.write("SLOT", slot)
         except OSError as e:
-            _warn(f"could not switch to SETUP {slot}: {e.strerror}")
+            _warn(f"could not switch to SETUP {store.slot_label(slot)}: {e.strerror}")
             return False
         for _ in range(50):
             if base.read("SLOT") == slot:
                 return True
             time.sleep(0.02)
-        _warn(f"the wheel base did not confirm SETUP {slot}")
+        _warn(f"the wheel base did not confirm SETUP {store.slot_label(slot)}")
         return False
     # After a reboot the driver has no data from the base yet; select the setup directly, as the app does.
     node = find_hidraw(base)
@@ -68,7 +69,7 @@ def switch_setup(slot: int) -> bool:
         finally:
             os.close(fd)
     except OSError as e:
-        _warn(f"could not switch to SETUP {slot}: {e.strerror}")
+        _warn(f"could not switch to SETUP {store.slot_label(slot)}: {e.strerror}")
         return False
     return True
 
@@ -79,7 +80,7 @@ def main(argv: list[str]) -> int:
         description="Fanatec Pitbox. Without options the app opens. In Steam launch options: "
                     "fanatec-pitbox --setup 3 %command%")
     parser.add_argument("--setup", metavar="SETUP",
-                        help="make this setup active (1-5, or a name you gave it in the app), then run COMMAND")
+                        help="make this setup active (A, S1-S5, or a name you gave it in the app), then run COMMAND")
     parser.add_argument("--list", action="store_true", help="list the setups and which one is active")
     parser.add_argument("command", nargs=argparse.REMAINDER, help="game command to run afterwards (%%command%%)")
     args = parser.parse_args(argv)
@@ -91,18 +92,18 @@ def main(argv: list[str]) -> int:
         active = bases[0].read("SLOT") if bases and bases[0].ready() else None
         for n in store.SLOTS:
             name = state.aliases.get(n, "")
-            print(f"{'*' if n == active else ' '} {n}  {name}".rstrip())
+            print(f"{'*' if n == active else ' '} {store.slot_label(n):<2} {name}".rstrip())
         if not bases:
             _warn("no Fanatec wheel base found")
 
     if args.setup is not None:
         slot = _resolve(args.setup, state)
         if slot is None:
-            _warn(f"unknown setup {args.setup!r}; use 1-5 or a setup name from the app")
+            _warn(f"unknown setup {args.setup!r}; use A, S1-S5 or a setup name from the app")
         elif switch_setup(slot):
             state.last_slot = slot
             state.save()
-            print(f"fanatec-pitbox: SETUP {slot}{' · ' + state.aliases[slot] if state.aliases.get(slot) else ''}"
+            print(f"fanatec-pitbox: SETUP {store.slot_label(slot)}{' · ' + state.aliases[slot] if state.aliases.get(slot) else ''}"
                   " is active", file=sys.stderr)
 
     if command:

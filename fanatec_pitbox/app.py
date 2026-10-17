@@ -1,5 +1,5 @@
-"""Main window: the wheel base's 5 setups (sidebar), the tuning panel for the active setup, and
-profiles (snapshots of all 5 setups) for backup and restore."""
+"""Main window: the wheel base's 6 setups (sidebar), the tuning panel for the active setup, and
+profiles (snapshots of all 6 setups) for backup and restore."""
 
 import errno
 import os
@@ -475,12 +475,12 @@ class MainWindow(QMainWindow):
         head.addWidget(QLabel("ON THIS PC", objectName="yellowLabel"))
         helper_row = QHBoxLayout()
         helper_row.setSpacing(16)
-        helper_row.addWidget(QLabel("Saved copies of all 5 setups. Loading one replaces the base's setups, after an "
+        helper_row.addWidget(QLabel("Saved copies of all 6 setups. Loading one replaces the base's setups, after an "
                                     "automatic backup.", objectName="bodyMuted", wordWrap=True), 1)
         self.save_new_btn = QPushButton("+", objectName="addButton")
         self.save_new_btn.setFixedSize(30, 30)
         self.save_new_btn.setCursor(Qt.PointingHandCursor)
-        self.save_new_btn.setToolTip("Save the 5 setups on the wheel base as a new profile")
+        self.save_new_btn.setToolTip("Save the 6 setups on the wheel base as a new profile")
         self.save_new_btn.clicked.connect(self._save_new_profile)
         helper_row.addWidget(self.save_new_btn, 0, Qt.AlignVCenter)
         head.addLayout(helper_row)
@@ -533,7 +533,7 @@ class MainWindow(QMainWindow):
         self.steam_setup = QComboBox()
         self.steam_setup.setFixedWidth(200)
         for n in store.SLOTS:
-            self.steam_setup.addItem(f"Setup {n}", n)
+            self.steam_setup.addItem(f"Setup {store.slot_label(n)}", n)
         self.steam_cmd = QLineEdit(objectName="codeField", readOnly=True)
         self.steam_copy = _button("Copy")
         self.steam_copy.clicked.connect(lambda: (QGuiApplication.clipboard().setText(self.steam_cmd.text()),
@@ -751,13 +751,13 @@ class MainWindow(QMainWindow):
         else:
             self._banner(None)
 
-        # sidebar: mirrors the base's own tuning menu (5 setups in Advanced, 1 in Standard)
+        # sidebar: mirrors the base's own tuning menu (6 setups in Advanced, 1 in Standard)
         standard = ready and not adv
         if standard:
             self.side_title.setText("STANDARD SETUP")
             self.side_text.setText(
                 "The wheel base is in Standard mode: one setup with the core settings only (SEN, FF, NDP, "
-                "BRF), as on the wheel's own tuning menu. Switch to Advanced for the 5 setups and all settings.")
+                "BRF), as on the wheel's own tuning menu. Switch to Advanced for the 6 setups and all settings.")
         else:
             self.side_title.setText("SETUPS")
             self.side_text.setText("Stored on the wheel base. Click to make one active; double-click to rename.")
@@ -784,8 +784,8 @@ class MainWindow(QMainWindow):
             self.editing_lbl.setText("Standard setup")
             self.editing_lbl.setToolTip("Read-only in this app: change these on the wheel.")
         else:
-            self.editing_lbl.setText((self.state.aliases.get(slot) or f"Setup {slot}") if ready and slot else "—")
-            self.editing_lbl.setToolTip(f"SETUP {slot}" if slot else "")
+            self.editing_lbl.setText((self.state.aliases.get(slot) or f"Setup {store.slot_label(slot)}") if ready and slot else "—")
+            self.editing_lbl.setToolTip(f"SETUP {store.slot_label(slot)}" if slot else "")
         n = len(self.draft)
         self.dirty_bar.setVisible(bool(n))
         self.write_btn.setEnabled(bool(n) and adv and idle)
@@ -794,7 +794,7 @@ class MainWindow(QMainWindow):
 
         for i, n in enumerate(store.SLOTS):  # setup names in the Steam drop-down
             alias = self.state.aliases.get(n)
-            self.steam_setup.setItemText(i, f"Setup {n} · {alias}" if alias else f"Setup {n}")
+            self.steam_setup.setItemText(i, f"Setup {store.slot_label(n)} · {alias}" if alias else f"Setup {store.slot_label(n)}")
         if slot and not self._steam_setup_chosen:
             self._steam_setup_chosen = True  # start on the active setup, then leave the choice to the user
             self.steam_setup.setCurrentIndex(slot - 1)
@@ -813,7 +813,7 @@ class MainWindow(QMainWindow):
         repolish(self.model_value, muted=m is None)
         self.model_change_btn.setVisible(len(models) > 1)
         for n, row in self.base_setup_rows.items():
-            row.update_row(self.state.aliases.get(n) or f"Setup {n}", self._summary(self.state.seen.get(n)),
+            row.update_row(self.state.aliases.get(n) or f"Setup {store.slot_label(n)}", self._summary(self.state.seen.get(n)),
                            active=(n == slot and adv))
         prof = self._profile(self.state.loaded)
         changed = prof.differs(self.state.seen) if prof else []
@@ -826,7 +826,7 @@ class MainWindow(QMainWindow):
         for name, row in self.profile_rows.items():
             p = self._profile(name)
             if p:
-                row.update_row(p.saved, " · ".join(p.aliases.get(n) or f"Setup {n}" for n in sorted(p.slots)),
+                row.update_row(p.saved, " · ".join(p.aliases.get(n) or f"Setup {store.slot_label(n)}" for n in sorted(p.slots)),
                                loaded=name == self.state.loaded, selected=name == self.selected_profile,
                                can_load=can_save)
 
@@ -840,14 +840,14 @@ class MainWindow(QMainWindow):
         if ready and not adv:
             self.ro_setup.setText("Standard")
         elif slot:
-            self.ro_setup.setText(self.state.aliases.get(slot) or f"Setup {slot}")
+            self.ro_setup.setText(self.state.aliases.get(slot) or f"Setup {store.slot_label(slot)}")
         else:
             self.ro_setup.setText("—")
         prof = self._profile(self.state.loaded)
         self.ro_profile.setText(prof.name if prof else "None")
         changed = prof.differs(self.state.seen) if prof else []
         self.ro_profile.setToolTip("" if not prof else
-                                   f"Setup {', '.join(map(str, changed))} differs from “{prof.name}”" if changed else
+                                   f"Setup {', '.join(map(store.slot_label, changed))} differs from “{prof.name}”" if changed else
                                    f"The wheel base matches “{prof.name}”")
 
     def _summary(self, values) -> str:
@@ -917,10 +917,10 @@ class MainWindow(QMainWindow):
                     break
                 yield 20
             else:
-                raise OperationFailed(f"The wheel base did not switch to SETUP {slot}.")
+                raise OperationFailed(f"The wheel base did not switch to SETUP {store.slot_label(slot)}.")
         yield SETTLE_MS
         if self.base.read("SLOT") != slot or self.base.read("advanced_mode") != 1:
-            raise OperationFailed(f"SETUP {slot} is no longer active; stopped to avoid writing to the wrong setup.")
+            raise OperationFailed(f"SETUP {store.slot_label(slot)} is no longer active; stopped to avoid writing to the wrong setup.")
 
     def _g_write(self, values: dict[str, int]):
         """Write values into the active setup, read back, retry once. Returns {key: (wanted, actual)}."""
@@ -941,7 +941,7 @@ class MainWindow(QMainWindow):
         return {k: (v, self.base.read(k)) for k, v in todo.items()}
 
     def _g_read_all_slots(self):
-        """Read all 5 setups (switching through them) and return to the original one."""
+        """Read all 6 setups (switching through them) and return to the original one."""
         start = self.base.read("SLOT")
         slots = {}
         for n in store.SLOTS:
@@ -1016,13 +1016,13 @@ class MainWindow(QMainWindow):
     def _select_slot(self, slot: int):
         if self.busy or slot == self.live.get("SLOT"):
             return
-        if not self._confirm_discard_draft(f"Switching to SETUP {slot}"):
+        if not self._confirm_discard_draft(f"Switching to SETUP {store.slot_label(slot)}"):
             return
         self._write("SLOT", slot)
         self.refresh()
 
     def _rename_slot(self, slot: int):
-        name, ok = QInputDialog.getText(self, f"Name SETUP {slot}",
+        name, ok = QInputDialog.getText(self, f"Name SETUP {store.slot_label(slot)}",
                                         "Name for this setup, e.g. the game (empty to clear):",
                                         text=self.state.aliases.get(slot, ""))
         if not ok:
@@ -1040,7 +1040,7 @@ class MainWindow(QMainWindow):
         if not self.base or self.busy or not self._confirm_discard_draft("Changing the tuning mode"):
             return
         target = "Advanced" if advanced else "Standard"
-        backup = ("All 5 setups will be saved as an auto-backup profile first." if self._advanced() else
+        backup = ("All 6 setups will be saved as an auto-backup profile first." if self._advanced() else
                   "Setups cannot be backed up while in Standard mode.")
         ok = QMessageBox.warning(
             self, "Change tuning mode",
@@ -1101,7 +1101,7 @@ class MainWindow(QMainWindow):
         models = models_for(self.base.product) if self.base else ()
         slot = self.live.get("SLOT")
         dlg = FirstRunDialog(lambda: run_checks(self.base), models, self.model(), self.params, self._known_values,
-                             {n: self.state.aliases.get(n) or f"Setup {n}" for n in store.SLOTS}, slot, base_steps, self)
+                             {n: self.state.aliases.get(n) or f"Setup {store.slot_label(n)}" for n in store.SLOTS}, slot, base_steps, self)
         dlg.picker.values_needed.connect(lambda _slot: self._read_unknown_setups())
 
         def finished(result):
@@ -1123,7 +1123,7 @@ class MainWindow(QMainWindow):
             return
         slot = self.live.get("SLOT")
         dlg = BaselineDialog(models_for(self.base.product), self.model(), self.params, self._known_values,
-                             {n: self.state.aliases.get(n) or f"Setup {n}" for n in store.SLOTS}, slot, self)
+                             {n: self.state.aliases.get(n) or f"Setup {store.slot_label(n)}" for n in store.SLOTS}, slot, self)
         dlg.picker.values_needed.connect(lambda _slot: self._read_unknown_setups())
 
         def finished(result):
@@ -1139,7 +1139,7 @@ class MainWindow(QMainWindow):
         dlg.open()
 
     def _read_unknown_setups(self):
-        """Read all 5 setups (as Save setups does) when a setup's values are still unknown, so the
+        """Read all 6 setups (as Save setups does) when a setup's values are still unknown, so the
         recommended-baseline table can show them. Skipped while busy, with unwritten changes or in Standard mode."""
         if (not self.base or self.busy or self.draft or not self._advanced() or not self.base.ready()
                 or all(n in self.state.seen for n in store.SLOTS)):
@@ -1260,7 +1260,7 @@ class MainWindow(QMainWindow):
             self.state.loaded = p.name
             self.state.save()
             self._reload_profiles(select=p.name)
-            self.statusBar().showMessage(f"Saved all 5 setups as “{p.name}”.", 6000)
+            self.statusBar().showMessage(f"Saved all 6 setups as “{p.name}”.", 6000)
 
         self._run("Reading setups", self._g_read_all_slots(), done)
 
