@@ -1,6 +1,6 @@
 # Maintainer: chornyak <2799110+chornyak@users.noreply.github.com>
 pkgname=fanatec-pitbox
-pkgver=0.1.0
+pkgver=0.1.1
 pkgrel=1
 pkgdesc="Tuning, setups and input test for Fanatec wheel bases, on top of the hid-fanatecff driver"
 arch=('any')
@@ -10,7 +10,7 @@ depends=('python' 'pyside6' 'hicolor-icon-theme')
 makedepends=('python-build' 'python-installer' 'python-setuptools' 'python-wheel')
 optdepends=('hid-fanatecff-dkms: the kernel driver the app works on top of (or install the driver yourself)')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('7aca4912ea493dfe79bc03ae05ebe134614154102e12ddb9cce7684eae5f1b0a')
+sha256sums=('e572cf2ae62c4b6813075e08002b0d81a4a3907e4cc791ae25960c8f0a58a3e5')
 
 build() {
   cd "$pkgname-$pkgver"
