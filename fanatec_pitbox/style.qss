@@ -253,6 +253,12 @@ QSpinBox {
     selection-background-color: #f2e600;
     selection-color: #111214;
 }
+/* the arrows are hidden here, not with NoButtons, which breaks the text field's layout in Qt 6.12 (widgets.py) */
+QSpinBox::up-button, QSpinBox::down-button {
+    width: 0;
+    border: none;
+    image: none;
+}
 QSpinBox:focus {
     border-color: #6c6f75;
 }

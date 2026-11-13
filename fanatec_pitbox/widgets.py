@@ -40,7 +40,8 @@ class ValueBox(QSpinBox):
         self.param = param
         self.setRange(param.min, param.max)
         self.setSingleStep(param.step)
-        self.setButtonSymbols(QSpinBox.NoButtons)
+        # The arrows stay enabled and are hidden in style.qss: with NoButtons and a stylesheet border, Qt 6.12
+        # lays the text field out 1 px wide and the value can't be seen.
         self.setAlignment(Qt.AlignCenter)
         self.setKeyboardTracking(False)
         self.setFixedSize(68, 32)
